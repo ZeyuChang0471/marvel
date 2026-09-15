@@ -1,0 +1,22 @@
+# Normalize line endings in the repository.
+# Checkouts get platform-appropriate endings so the shell launchers keep
+# working on Linux/macOS and .bat files keep working on Windows.
+
+* text=auto
+
+*.sh   text eol=lf
+*.bash text eol=lf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Binary assets — never touch these
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.pdf  binary
+*.ico  binary
+*.woff binary
+*.woff2 binary

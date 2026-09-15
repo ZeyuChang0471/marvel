@@ -1,0 +1,51 @@
+MARVEL
+Multi-Agent Research & Valuation Engine for Long-short
+
+Copyright 2026 ZeyuChang0471 (https://github.com/ZeyuChang0471)
+
+==============================================================================
+This product is a fork of TradingAgents-Astock
+(https://github.com/simonlin1212/tradingagents-astock), which is itself a
+fork of TradingAgents (https://github.com/TauricResearch/TradingAgents).
+Licensed under the Apache License, Version 2.0.
+==============================================================================
+
+UPSTREAM ATTRIBUTION
+(retained as required by Section 4 of the Apache License, Version 2.0)
+
+  TradingAgents
+    Copyright 2024-2025 TauricResearch
+    https://github.com/TauricResearch/TradingAgents
+
+  TradingAgents-Astock
+    Copyright 2026 Simon (github.com/simonlin1212)
+    https://github.com/simonlin1212/tradingagents-astock
+    MARVEL is derived from TradingAgents-Astock v0.2.13.
+
+  Licensed under the Apache License, Version 2.0
+  (https://www.apache.org/licenses/LICENSE-2.0)
+
+==============================================================================
+MODIFICATIONS
+==============================================================================
+
+Inherited from TradingAgents-Astock (v0.2.13):
+  - A-stock (China mainland) data layer using mootdx, Tencent Finance,
+    Eastmoney and other direct HTTP sources (akshare was removed in v0.2.5)
+  - Three A-stock specific analyst agents (Policy, Hot Money, Lockup)
+  - A-stock trading constraints (T+1, price limits, lot sizes) in Trader and PM
+  - Chinese language output support
+  - CSI 300 benchmark for alpha calculation (replacing SPY)
+  - Various prompt and pipeline adaptations for A-share market specifics
+
+Added by MARVEL on top of TradingAgents-Astock v0.2.13:
+  - Rebranding and repackaging as MARVEL
+  - Language-instruction injection for the three risk-management debators
+  - More robust rating parsing (Chinese "评级：" labels, standalone-word fallback)
+  - Fallback ticker resolution when persisting results
+  - Web UI: auto-detection of the configured LLM provider, removal of the
+    manual trade-date input, new MARVEL theme
+  - One-click launchers (start.bat / start.sh / run.py / run_single.py)
+    including batch analysis over a stock list
+
+See CHANGES_FROM_UPSTREAM.md for the upstream modification list.
