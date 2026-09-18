@@ -67,6 +67,22 @@ class ConditionalLogic:
             return "tools_lockup"
         return "Msg Clear Lockup"
 
+    def should_continue_macro(self, state: AgentState):
+        """Determine if macro / sector-rotation analysis should continue."""
+        messages = state["messages"]
+        last_message = messages[-1]
+        if last_message.tool_calls:
+            return "tools_macro"
+        return "Msg Clear Macro"
+
+    def should_continue_volume_price(self, state: AgentState):
+        """Determine if volume-price analysis should continue."""
+        messages = state["messages"]
+        last_message = messages[-1]
+        if last_message.tool_calls:
+            return "tools_volume_price"
+        return "Msg Clear Volume_price"
+
     def should_continue_debate(self, state: AgentState) -> str:
         """Determine if debate should continue."""
 

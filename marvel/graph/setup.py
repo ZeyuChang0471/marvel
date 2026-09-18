@@ -27,19 +27,32 @@ class GraphSetup:
         self.conditional_logic = conditional_logic
 
     def setup_graph(
-        self, selected_analysts=["market", "social", "news", "fundamentals", "policy", "hot_money", "lockup"]
+        self,
+        selected_analysts=[
+            "market",
+            "volume_price",
+            "social",
+            "news",
+            "fundamentals",
+            "policy",
+            "hot_money",
+            "lockup",
+            "macro",
+        ],
     ):
         """Set up and compile the agent workflow graph.
 
         Args:
             selected_analysts (list): List of analyst types to include. Options are:
                 - "market": Market analyst (technical analysis)
+                - "volume_price": Volume-price analyst (Wyckoff / Anna Coulling)
                 - "social": Social media / sentiment analyst
                 - "news": News analyst
                 - "fundamentals": Fundamentals analyst
                 - "policy": Policy analyst (A-stock specific)
                 - "hot_money": Hot money / capital flow tracker (A-stock specific)
                 - "lockup": Lockup expiry / reduction watcher (A-stock specific)
+                - "macro": Macro / sector-rotation analyst
         """
         if len(selected_analysts) == 0:
             raise ValueError("Trading Agents Graph Setup Error: no analysts selected!")
@@ -97,6 +110,20 @@ class GraphSetup:
             )
             delete_nodes["lockup"] = create_msg_delete()
             tool_nodes["lockup"] = self.tool_nodes["lockup"]
+
+        if "volume_price" in selected_analysts:
+            analyst_nodes["volume_price"] = create_volume_price_analyst(
+                self.quick_thinking_llm
+            )
+            delete_nodes["volume_price"] = create_msg_delete()
+            tool_nodes["volume_price"] = self.tool_nodes["volume_price"]
+
+        if "macro" in selected_analysts:
+            analyst_nodes["macro"] = create_macro_analyst(
+                self.quick_thinking_llm
+            )
+            delete_nodes["macro"] = create_msg_delete()
+            tool_nodes["macro"] = self.tool_nodes["macro"]
 
         # Create quality gate node
         quality_gate_node = create_quality_gate(self.quick_thinking_llm)

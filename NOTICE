@@ -92,6 +92,15 @@ Extracted from TradingAgents-AShare (PolyForm Noncommercial 1.0.0):
   - A-share trading calendar and intraday market phase, reworked to fetch the
     calendar over MARVEL's direct-HTTP path instead of adding an akshare
     dependency
+  - Volume Price Analyst: the Wyckoff / Anna Coulling analytical framework,
+    rewritten as a MARVEL-native synchronous node and extended with A-share
+    specifics (T+1, price limits, 量在价先, turnover)
+  - Macro Analyst: sector-rotation and policy-transmission role, rebuilt on
+    MARVEL's existing industry-comparison / concept-block / northbound tools
+  - Per-round debate objectives (debate_utils), applied to the Bull/Bear
+    debate and the three-way risk debate. The rest of that project's
+    debate_utils implements its claim-registry protocol and is deliberately
+    not ported — MARVEL's debate layer is prose-based.
 
 Added by MARVEL:
   - Rebranding and packaging as MARVEL (package renamed to `marvel`)

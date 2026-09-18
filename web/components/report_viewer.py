@@ -36,6 +36,8 @@ _ANALYST_SECTIONS = [
     ("policy_report", "🏛️ 政策分析"),
     ("hot_money_report", "🔥 游资追踪"),
     ("lockup_report", "🔒 解禁/减持"),
+    ("volume_price_report", "📉 量价分析"),
+    ("macro_report", "🌐 宏观与板块"),
 ]
 
 

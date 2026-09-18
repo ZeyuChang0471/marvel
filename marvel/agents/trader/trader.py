@@ -33,6 +33,8 @@ def create_trader(llm):
         policy_report = state.get("policy_report", "")
         hot_money_report = state.get("hot_money_report", "")
         lockup_report = state.get("lockup_report", "")
+        volume_price_report = state.get("volume_price_report", "")
+        macro_report = state.get("macro_report", "")
 
         # Build optional A-stock context block
         astock_context_parts = []
@@ -42,6 +44,10 @@ def create_trader(llm):
             astock_context_parts.append(f"Hot Money / Capital Flow Report:\n{hot_money_report}")
         if lockup_report:
             astock_context_parts.append(f"Lockup Expiry / Insider Reduction Report:\n{lockup_report}")
+        if volume_price_report:
+            astock_context_parts.append(f"Volume-Price (Wyckoff) Report:\n{volume_price_report}")
+        if macro_report:
+            astock_context_parts.append(f"Macro / Sector-Rotation Report:\n{macro_report}")
         astock_context = "\n\n".join(astock_context_parts)
 
         messages = [

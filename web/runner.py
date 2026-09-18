@@ -17,6 +17,7 @@ _REPORT_KEY_TO_STAGE = {s["report_key"]: s["id"] for s in PIPELINE_STAGES}
 _ANALYST_REPORT_KEYS = [
     "market_report", "sentiment_report", "news_report",
     "fundamentals_report", "policy_report", "hot_money_report", "lockup_report",
+    "volume_price_report", "macro_report",
 ]
 
 

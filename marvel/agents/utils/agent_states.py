@@ -59,6 +59,8 @@ class AgentState(MessagesState):
     policy_report: Annotated[str, "Report from the Policy Analyst (A-stock specific)"]
     hot_money_report: Annotated[str, "Report from the Hot Money Tracker (A-stock specific)"]
     lockup_report: Annotated[str, "Report from the Lockup/Reduction Watcher (A-stock specific)"]
+    volume_price_report: Annotated[str, "Report from the Volume Price Analyst (Wyckoff volume-price)"]
+    macro_report: Annotated[str, "Report from the Macro / Sector-Rotation Analyst"]
 
     # data quality gate
     data_quality_summary: Annotated[str, "Quality gate assessment of all analyst reports (hard checks + LLM review)"]

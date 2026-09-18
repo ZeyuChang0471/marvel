@@ -1,3 +1,4 @@
+from marvel.agents.utils.debate_utils import default_round_goal
 from marvel.agents.utils.agent_utils import get_language_instruction
 
 
@@ -19,6 +20,10 @@ def create_aggressive_debator(llm):
         policy_report = state.get("policy_report", "")
         hot_money_report = state.get("hot_money_report", "")
         lockup_report = state.get("lockup_report", "")
+        volume_price_report = state.get("volume_price_report", "")
+        macro_report = state.get("macro_report", "")
+        round_no = risk_debate_state.get("count", 0) + 1
+        round_goal = default_round_goal("risk", round_no)
 
         trader_decision = state["trader_investment_plan"]
 
@@ -45,6 +50,9 @@ Company Fundamentals Report: {fundamentals_report}
 Policy Analysis Report: {policy_report}
 Hot Money / Capital Flow Report: {hot_money_report}
 Lockup Expiry / Insider Reduction Report: {lockup_report}
+Volume-Price (Wyckoff) Report: {volume_price_report}
+Macro / Sector-Rotation Report: {macro_report}
+本轮议题目标（第 {round_no} 轮）：{round_goal}
 Conversation history: {history} Last conservative argument: {current_conservative_response} Last neutral argument: {current_neutral_response}. If no responses yet, present your own argument.
 
 Engage actively, debate persuasively, and assert why aggressive positioning is optimal for this A-share opportunity. Output conversationally without special formatting.{get_language_instruction()}"""

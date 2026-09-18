@@ -24,10 +24,13 @@ MARVEL 不是一个从零开始的项目：它建立在两个上游之上，并�
 当前包括：
 
 ```
-marvel/dataflows/trade_calendar.py     # A股交易日历与盘中状态机
+marvel/dataflows/trade_calendar.py              # A股交易日历与盘中状态机
+marvel/agents/analysts/volume_price_analyst.py  # 量价分析师（Wyckoff / Anna Coulling 体系）
+marvel/agents/analysts/macro_analyst.py         # 宏观与板块轮动分析师
+marvel/agents/utils/debate_utils.py             # 辩论轮次的议题目标
 ```
 
-该文件头部带有来源标注。**新增任何来自该项目的文件时，必须同步更新本清单和
+这些文件头部均带有来源标注。**新增任何来自该项目的文件时，必须同步更新本清单和
 `LICENSE-TradingAgents-AShare.txt` 中的 Required Notice 段。**
 
 ---

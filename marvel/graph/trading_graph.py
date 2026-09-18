@@ -60,7 +60,17 @@ class MarvelGraph:
 
     def __init__(
         self,
-        selected_analysts=["market", "social", "news", "fundamentals", "policy", "hot_money", "lockup"],
+        selected_analysts=[
+            "market",
+            "volume_price",
+            "social",
+            "news",
+            "fundamentals",
+            "policy",
+            "hot_money",
+            "lockup",
+            "macro",
+        ],
         debug=False,
         config: Dict[str, Any] = None,
         callbacks: Optional[List] = None,
@@ -220,6 +230,22 @@ class MarvelGraph:
                     get_news,
                     get_fundamentals,
                     get_lockup_expiry,
+                ]
+            ),
+            "volume_price": ToolNode(
+                [
+                    # Daily bars carry the volume series VPA needs
+                    get_stock_data,
+                    get_indicators,
+                ]
+            ),
+            "macro": ToolNode(
+                [
+                    get_industry_comparison,
+                    get_concept_blocks,
+                    get_northbound_flow,
+                    get_news,
+                    get_global_news,
                 ]
             ),
         }
@@ -395,6 +421,8 @@ class MarvelGraph:
             "policy_report": final_state.get("policy_report", ""),
             "hot_money_report": final_state.get("hot_money_report", ""),
             "lockup_report": final_state.get("lockup_report", ""),
+            "volume_price_report": final_state.get("volume_price_report", ""),
+            "macro_report": final_state.get("macro_report", ""),
             "investment_debate_state": {
                 "bull_history": final_state["investment_debate_state"]["bull_history"],
                 "bear_history": final_state["investment_debate_state"]["bear_history"],

@@ -8,6 +8,8 @@ REPORT_FIELDS = {
     "policy": "policy_report",
     "hot_money": "hot_money_report",
     "lockup": "lockup_report",
+    "volume_price": "volume_price_report",
+    "macro": "macro_report",
 }
 
 ANALYST_NAMES = {
@@ -18,6 +20,8 @@ ANALYST_NAMES = {
     "policy": "政策分析师",
     "hot_money": "游资追踪师",
     "lockup": "解禁监控师",
+    "volume_price": "量价分析师",
+    "macro": "宏观板块分析师",
 }
 
 MIN_REPORT_LENGTH = 200

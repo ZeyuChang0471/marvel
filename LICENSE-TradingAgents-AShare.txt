@@ -130,6 +130,9 @@ Required Notice: Copyright (c) 2026 KylinMountain / TradingAgents-AShare Team
 
 Components taken into MARVEL (see LICENSING.md for the current list):
   - marvel/dataflows/trade_calendar.py
+  - marvel/agents/analysts/volume_price_analyst.py
+  - marvel/agents/analysts/macro_analyst.py
+  - marvel/agents/utils/debate_utils.py
 ```
 
 The upstream project states: the core logic it derives from
