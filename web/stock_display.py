@@ -72,19 +72,26 @@ def _resolve_display_code(ticker: str) -> str:
 
 @lru_cache(maxsize=1024)
 def resolve_stock_name(ticker: str) -> str | None:
-    """Return the A-share name for a ticker code when local market data can resolve it."""
+    """Return the A-share name for a ticker code when local market data can resolve it.
+
+    Resolved with a single Tencent quote rather than `_build_name_code_map()`.
+    The full-market map needs mootdx/TCP: when the Tongdaxin port is
+    unreachable it probes 14 falsely-reachable servers one after another and
+    takes about 80 seconds. This runs on every report render, so building the
+    whole table to label one row was making the results page hang for over a
+    minute. A missing name just means the label shows the bare code.
+    """
     code = _resolve_display_code(ticker)
     if not re.match(r"^[036]\d{5}$", code):
         return None
 
     try:
-        from marvel.dataflows.a_stock import _build_name_code_map
+        from marvel.dataflows.a_stock import get_stock_name
 
-        _, code_to_name = _build_name_code_map()
+        name = _clean_stock_name(get_stock_name(code) or "")
     except Exception:
         return None
 
-    name = _clean_stock_name(code_to_name.get(code, ""))
     return name or None
 
 

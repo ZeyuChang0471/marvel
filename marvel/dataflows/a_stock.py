@@ -120,10 +120,81 @@ _name_to_code: dict[str, str] | None = None
 _code_to_name: dict[str, str] | None = None
 
 
+_NAME_MAP_CACHE_FILE = "name_code_map.json"
+_NAME_MAP_CACHE_TTL_S = 24 * 3600
+
+
+def _name_map_cache_path() -> str:
+    """Path to the on-disk full-market name↔code map."""
+    from .config import get_config
+
+    config = get_config()
+    cache_dir = config.get(
+        "data_cache_dir", os.path.expanduser("~/.marvel/cache")
+    )
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, _NAME_MAP_CACHE_FILE)
+
+
+def _load_name_map_from_disk():
+    """Return (name→code, code→name) from a fresh cache file, else None."""
+    path = _name_map_cache_path()
+    if not os.path.exists(path):
+        return None
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = _json.load(f)
+
+        age = time.time() - float(payload.get("built_at", 0))
+        if age > _NAME_MAP_CACHE_TTL_S:
+            logger.info("名称映射缓存已过期（%.1f 小时），将重建", age / 3600)
+            return None
+
+        n2c = payload.get("name_to_code")
+        c2n = payload.get("code_to_name")
+        if not isinstance(n2c, dict) or not isinstance(c2n, dict) or not n2c:
+            return None
+        return n2c, c2n
+    except Exception as exc:  # 缓存坏掉只是少一次优化，绝不能影响查询
+        logger.debug("读取名称映射缓存失败，将重建：%s", exc)
+        return None
+
+
+def _save_name_map_to_disk(n2c: dict, c2n: dict) -> None:
+    """Persist the map so a later process start does not rebuild it.
+
+    Best-effort by design: a read-only or sandboxed cache directory must never
+    turn a successful lookup into a failure.
+    """
+    try:
+        payload = {
+            "built_at": time.time(),
+            "name_to_code": n2c,
+            "code_to_name": c2n,
+        }
+        with open(_name_map_cache_path(), "w", encoding="utf-8") as f:
+            _json.dump(payload, f, ensure_ascii=False)
+        logger.info("名称映射已写入磁盘缓存：%d 条", len(n2c))
+    except Exception as exc:
+        logger.debug("写入名称映射缓存失败（不影响本次结果）：%s", exc)
+
+
 def _build_name_code_map() -> tuple[dict[str, str], dict[str, str]]:
-    """Build name→code and code→name maps via mootdx (both SH & SZ markets)."""
+    """Build name→code and code→name maps (both SH & SZ markets).
+
+    Served from the on-disk cache while it is fresh: building it needs mootdx,
+    and when the Tongdaxin TCP port is unreachable that costs roughly 80
+    seconds of serial server probing (see ``_get_mootdx_client``).
+    """
     global _name_to_code, _code_to_name
     if _name_to_code is not None:
+        return _name_to_code, _code_to_name
+
+    cached = _load_name_map_from_disk()
+    if cached is not None:
+        _name_to_code, _code_to_name = cached
+        logger.info("Loaded stock name-code map from cache: %d entries", len(cached[0]))
         return _name_to_code, _code_to_name
 
     n2c: dict[str, str] = {}
@@ -151,6 +222,7 @@ def _build_name_code_map() -> tuple[dict[str, str], dict[str, str]]:
 
     _name_to_code = n2c
     _code_to_name = c2n
+    _save_name_map_to_disk(n2c, c2n)
     logger.info("Built stock name-code map: %d entries", len(n2c))
     return _name_to_code, _code_to_name
 
@@ -523,6 +595,41 @@ def _tencent_quote(codes: list[str]) -> dict[str, dict]:
             "pe_static": float(vals[52]) if vals[52] else 0,
         }
     return result
+
+
+def get_stock_name(code: str) -> str | None:
+    """Resolve one 6-digit A-share code to its name with a single Tencent call.
+
+    Deliberately NOT built on ``_build_name_code_map()``. That fetches a
+    full-market table over mootdx/TCP — the right tool for a name→code lookup,
+    but wildly disproportionate for a code→name display label, and it blocks
+    for roughly 80 seconds when the Tongdaxin port is unreachable (14 servers
+    pass the TCP pre-screen and each then waits out mootdx's own timeout, one
+    after another). Tencent answers the same question in about a second.
+
+    Returns None when the code is not an A-share or the lookup fails, so
+    callers can fall back to showing the bare code.
+    """
+    norm = _re.sub(
+        r"^(sh|sz|bj)|\s*\.\s*(sh|sz|bj)$",
+        "",
+        str(code).strip(),
+        flags=_re.IGNORECASE,
+    )
+    if not _re.match(r"^[03689]\d{5}$", norm):
+        return None
+
+    try:
+        quote = _tencent_quote([norm])
+    except Exception as exc:  # 网络问题只该让名称缺失，不该让调用方崩
+        logger.debug("腾讯个股名称查询失败 %s：%s", norm, exc)
+        return None
+
+    name = str((quote.get(norm) or {}).get("name", ""))
+    # Tencent pads some names ("五 粮 液"); _build_name_code_map normalises the
+    # same way, so the label looks the same however the name was resolved.
+    name = name.replace(" ", "").replace("　", "").strip()
+    return name or None
 
 
 # ---------------------------------------------------------------------------
