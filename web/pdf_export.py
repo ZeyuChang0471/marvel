@@ -585,7 +585,12 @@ def _collect_sections(
                 text = normalize_stock_mentions(text, ticker, final_state)
             sections.append(("多空辩论", text))
 
-    trader_decision = final_state.get("trader_investment_decision", "")
+    # Live state uses `trader_investment_plan`, the saved JSON uses
+    # `trader_investment_decision` — accept either (see report_viewer).
+    trader_decision = (
+        final_state.get("trader_investment_plan")
+        or final_state.get("trader_investment_decision", "")
+    )
     if trader_decision:
         text = _strip_think(str(trader_decision))
         if ticker:

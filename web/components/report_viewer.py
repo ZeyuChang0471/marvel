@@ -152,7 +152,14 @@ def render_report(
         with tab_judge:
             st.markdown(_display_report_text(debate.get("judge_decision", "") or "无数据", ticker, final_state))
 
-    trader_decision = final_state.get("trader_investment_decision", "")
+    # The live graph state carries `trader_investment_plan`; the JSON written by
+    # TradingAgentsGraph._log_state renames it to `trader_investment_decision`.
+    # Accept either, otherwise the live report renders this section empty while
+    # the same report reopened from history shows it.
+    trader_decision = (
+        final_state.get("trader_investment_plan")
+        or final_state.get("trader_investment_decision", "")
+    )
     if trader_decision:
         with st.expander("💹 交易员决策", expanded=False):
             st.markdown(_display_report_text(trader_decision, ticker, final_state))

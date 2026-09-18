@@ -237,7 +237,9 @@ def extract_signal(state: dict[str, Any]) -> str:
     _UNKNOWN = ""
     for field in (
         "final_trade_decision",
+        # saved JSON vs live state name the same field differently
         "trader_investment_decision",
+        "trader_investment_plan",
         "investment_plan",
     ):
         text = state.get(field, "")

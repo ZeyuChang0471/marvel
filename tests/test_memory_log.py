@@ -758,14 +758,19 @@ class TestLegacyRemoval:
         mock_graph.log_states_dict = {}
         mock_graph.debug = False
         mock_graph.config = {"results_dir": str(tmp_path)}
+        mock_graph.ticker = "NVDA"
         mock_graph.graph.invoke.return_value = fake_state
-        mock_graph.propagator.create_initial_state.return_value = fake_state
-        mock_graph.propagator.get_graph_args.return_value = {}
         mock_graph.signal_processor.process_signal.return_value = "Buy"
-        # Bind the real _run_graph so propagate's call to self._run_graph executes
-        # the actual write path instead of the auto-MagicMock.
+        # _run_graph now delegates state preparation to prepare_graph_run (so the
+        # web runner can drive the stream itself), so stub that rather than the
+        # propagator, and bind the real _run_graph / finalize_graph_run so
+        # propagate() still exercises the actual write path.
+        mock_graph.prepare_graph_run.return_value = (fake_state, {}, None)
         mock_graph._run_graph = functools.partial(
             MarvelGraph._run_graph, mock_graph
+        )
+        mock_graph.finalize_graph_run = functools.partial(
+            MarvelGraph.finalize_graph_run, mock_graph
         )
         MarvelGraph.propagate(mock_graph, "NVDA", "2026-01-10")
         entries = mock_graph.memory_log.load_entries()

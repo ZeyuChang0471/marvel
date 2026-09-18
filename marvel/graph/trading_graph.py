@@ -324,70 +324,71 @@ class MarvelGraph:
         if updates:
             self.memory_log.batch_update_with_outcomes(updates)
 
-    def propagate(self, company_name, trade_date):
-        """Run the trading agents graph for a company on a specific date.
+    def prepare_graph_run(
+        self,
+        company_name,
+        trade_date,
+        callbacks: Optional[List] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], Optional[int]]:
+        """Prepare graph input/args for a fresh or resumed run.
 
-        When ``checkpoint_enabled`` is set in config, the graph is recompiled
-        with a per-ticker SqliteSaver so a crashed run can resume from the last
-        successful node on a subsequent invocation with the same ticker+date.
+        Returns ``(initial_state, args, checkpoint_step)``. When a checkpoint
+        already exists, ``initial_state`` is ``None`` so LangGraph resumes the
+        existing thread instead of replaying completed nodes.
+
+        Split out from ``propagate`` so a caller can drive the stream itself —
+        the web UI reports per-node progress and needs to see each chunk.
         """
         self.ticker = company_name
 
         # Resolve any pending memory-log entries for this ticker before the pipeline runs.
         self._resolve_pending_entries(company_name)
 
+        checkpoint_enabled = self.config.get("checkpoint_enabled")
+        resume_step = None
+
         # Recompile with a checkpointer if the user opted in.
-        if self.config.get("checkpoint_enabled"):
+        if checkpoint_enabled:
             self._checkpointer_ctx = get_checkpointer(
                 self.config["data_cache_dir"], company_name
             )
             saver = self._checkpointer_ctx.__enter__()
             self.graph = self.workflow.compile(checkpointer=saver)
 
-            step = checkpoint_step(
+            resume_step = checkpoint_step(
                 self.config["data_cache_dir"], company_name, str(trade_date)
             )
-            if step is not None:
+            if resume_step is not None:
                 logger.info(
-                    "Resuming from step %d for %s on %s", step, company_name, trade_date
+                    "Resuming from step %d for %s on %s",
+                    resume_step,
+                    company_name,
+                    trade_date,
                 )
             else:
                 logger.info("Starting fresh for %s on %s", company_name, trade_date)
 
-        try:
-            return self._run_graph(company_name, trade_date)
-        finally:
-            if self._checkpointer_ctx is not None:
-                self._checkpointer_ctx.__exit__(None, None, None)
-                self._checkpointer_ctx = None
-                self.graph = self.workflow.compile()
+        args = self.propagator.get_graph_args(callbacks=callbacks)
 
-    def _run_graph(self, company_name, trade_date):
-        """Execute the graph and write the resulting state to disk and memory log."""
-        # Initialize state — inject memory log context for PM.
+        # Inject thread_id so same ticker+date resumes, different date starts fresh.
+        if checkpoint_enabled:
+            tid = thread_id(company_name, str(trade_date))
+            args.setdefault("config", {}).setdefault("configurable", {})["thread_id"] = tid
+
+        if checkpoint_enabled and resume_step is not None:
+            return None, args, resume_step
+
+        # Initialize state only for fresh runs — injecting memory-log context
+        # for the PM. Passing a new initial state to an existing thread would
+        # replay completed nodes.
         past_context = self.memory_log.get_past_context(company_name)
         init_agent_state = self.propagator.create_initial_state(
             company_name, trade_date, past_context=past_context
         )
-        args = self.propagator.get_graph_args()
+        return init_agent_state, args, resume_step
 
-        # Inject thread_id so same ticker+date resumes, different date starts fresh.
-        if self.config.get("checkpoint_enabled"):
-            tid = thread_id(company_name, str(trade_date))
-            args.setdefault("config", {}).setdefault("configurable", {})["thread_id"] = tid
-
-        if self.debug:
-            trace = []
-            for chunk in self.graph.stream(init_agent_state, **args):
-                if len(chunk["messages"]) == 0:
-                    pass
-                else:
-                    chunk["messages"][-1].pretty_print()
-                    trace.append(chunk)
-            final_state = trace[-1]
-        else:
-            final_state = self.graph.invoke(init_agent_state, **args)
-
+    def finalize_graph_run(self, company_name, trade_date, final_state):
+        """Persist a completed run, clear its checkpoint, and return the signal."""
         # Store current state for reflection.
         self.curr_state = final_state
 
@@ -407,7 +408,44 @@ class MarvelGraph:
                 self.config["data_cache_dir"], company_name, str(trade_date)
             )
 
-        return final_state, self.process_signal(final_state["final_trade_decision"])
+        return self.process_signal(final_state["final_trade_decision"])
+
+    def close_graph_run(self) -> None:
+        """Close the active checkpointer context, if any."""
+        if self._checkpointer_ctx is not None:
+            self._checkpointer_ctx.__exit__(None, None, None)
+            self._checkpointer_ctx = None
+            self.graph = self.workflow.compile()
+
+    def _run_graph(self, company_name, trade_date):
+        """Execute the graph and write the resulting state to disk and memory log."""
+        init_agent_state, args, _ = self.prepare_graph_run(company_name, trade_date)
+
+        if self.debug:
+            trace = []
+            for chunk in self.graph.stream(init_agent_state, **args):
+                if len(chunk["messages"]) == 0:
+                    pass
+                else:
+                    chunk["messages"][-1].pretty_print()
+                    trace.append(chunk)
+            final_state = trace[-1]
+        else:
+            final_state = self.graph.invoke(init_agent_state, **args)
+
+        return final_state, self.finalize_graph_run(company_name, trade_date, final_state)
+
+    def propagate(self, company_name, trade_date):
+        """Run the trading agents graph for a company on a specific date.
+
+        When ``checkpoint_enabled`` is set in config, the graph is recompiled
+        with a per-ticker SqliteSaver so a crashed run can resume from the last
+        successful node on a subsequent invocation with the same ticker+date.
+        """
+        try:
+            return self._run_graph(company_name, trade_date)
+        finally:
+            self.close_graph_run()
 
     def _log_state(self, trade_date, final_state):
         """Log the final state to a JSON file."""
