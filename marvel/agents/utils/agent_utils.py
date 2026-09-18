@@ -49,7 +49,9 @@ def build_instrument_context(ticker: str) -> str:
     return (
         f"The instrument to analyze is `{ticker}`. "
         "Use this exact ticker in every tool call, report, and recommendation, "
-        "preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`)."
+        "preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`). "
+        "When a tool argument is named `ticker`, pass only this ticker value; "
+        "do not pass company names, sectors, concepts, or search keywords."
     )
 
 def create_msg_delete():

@@ -39,21 +39,6 @@ class TestRenderTraderProposal:
         # analyst stop-signal text and any external code that greps for it.
         assert "FINAL TRANSACTION PROPOSAL: **HOLD**" in md
 
-    def test_optional_fields_included_when_present(self):
-        p = TraderProposal(
-            action=TraderAction.BUY,
-            reasoning="Strong technicals + fundamentals.",
-            entry_price=189.5,
-            stop_loss=178.0,
-            position_sizing="6% of portfolio",
-        )
-        md = render_trader_proposal(p)
-        assert "**Action**: Buy" in md
-        assert "**Entry Price**: 189.5" in md
-        assert "**Stop Loss**: 178.0" in md
-        assert "**Position Sizing**: 6% of portfolio" in md
-        assert "FINAL TRANSACTION PROPOSAL: **BUY**" in md
-
     def test_optional_fields_omitted_when_absent(self):
         p = TraderProposal(action=TraderAction.SELL, reasoning="Guidance cut.")
         md = render_trader_proposal(p)
@@ -118,22 +103,44 @@ def _structured_trader_llm(captured: dict, proposal: TraderProposal | None = Non
 
 
 @pytest.mark.unit
+class TestNoExecutionLevels:
+    """The framework ships no executable price levels at all — not a default,
+    not a flag. See TraderProposal's docstring for why."""
+
+    def test_schema_has_no_level_fields(self):
+        fields = TraderProposal.model_fields
+        assert "action" in fields and "reasoning" in fields
+        for f in ("entry_price", "stop_loss", "position_sizing"):
+            assert f not in fields
+
+    def test_prompt_forbids_levels(self):
+        captured = {}
+        trader = create_trader(_structured_trader_llm(captured))
+        trader(_make_trader_state())
+        system = next(m["content"] for m in captured["prompt"] if m["role"] == "system")
+        assert "Do NOT state entry prices" in system
+
+    def test_render_never_emits_levels(self):
+        p = TraderProposal(action=TraderAction.BUY, reasoning="Trend intact.")
+        md = render_trader_proposal(p)
+        for label in ("Entry Price", "Stop Loss", "Position Sizing"):
+            assert label not in md
+
+
+@pytest.mark.unit
 class TestTraderAgent:
     def test_structured_path_produces_rendered_markdown(self):
         captured = {}
         proposal = TraderProposal(
             action=TraderAction.BUY,
             reasoning="AI capex cycle intact; institutional flows constructive.",
-            entry_price=189.5,
-            stop_loss=178.0,
-            position_sizing="6% of portfolio",
         )
         llm = _structured_trader_llm(captured, proposal)
         trader = create_trader(llm)
         result = trader(_make_trader_state())
         plan = result["trader_investment_plan"]
         assert "**Action**: Buy" in plan
-        assert "**Entry Price**: 189.5" in plan
+        assert "**Reasoning**: AI capex cycle intact" in plan
         assert "FINAL TRANSACTION PROPOSAL: **BUY**" in plan
         # The same rendered markdown is also added to messages for downstream agents.
         assert plan in result["messages"][0].content

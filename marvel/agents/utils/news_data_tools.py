@@ -1,6 +1,26 @@
 from langchain_core.tools import tool
 from typing import Annotated
+import re
 from marvel.dataflows.interface import route_to_vendor
+
+_A_STOCK_CODE_RE = re.compile(r"^\d{6}$")
+
+
+def _invalid_a_stock_code_message(tool_name: str, ticker: str) -> str:
+    return (
+        f"Invalid ticker for `{tool_name}`: {ticker!r}. "
+        "This tool only accepts a 6-digit A-stock code, not Chinese text, "
+        "company names, sector names, concepts, or search keywords. "
+        "Use the original analysis ticker/code in the tool call."
+    )
+
+
+def _validate_a_stock_code(tool_name: str, ticker: str) -> tuple[bool, str]:
+    code = str(ticker or "").strip()
+    if not _A_STOCK_CODE_RE.fullmatch(code):
+        return False, _invalid_a_stock_code_message(tool_name, code)
+    return True, code
+
 
 @tool
 def get_news(
@@ -18,7 +38,10 @@ def get_news(
     Returns:
         str: A formatted string containing news data
     """
-    return route_to_vendor("get_news", ticker, start_date, end_date)
+    ok, code_or_message = _validate_a_stock_code("get_news", ticker)
+    if not ok:
+        return code_or_message
+    return route_to_vendor("get_news", code_or_message, start_date, end_date)
 
 @tool
 def get_global_news(
@@ -50,4 +73,7 @@ def get_insider_transactions(
     Returns:
         str: A report of insider transaction data
     """
-    return route_to_vendor("get_insider_transactions", ticker)
+    ok, code_or_message = _validate_a_stock_code("get_insider_transactions", ticker)
+    if not ok:
+        return code_or_message
+    return route_to_vendor("get_insider_transactions", code_or_message)

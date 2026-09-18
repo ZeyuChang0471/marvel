@@ -85,7 +85,7 @@ class ResearchPlan(BaseModel):
     strategic_actions: str = Field(
         description=(
             "Concrete steps for the trader to implement the recommendation, "
-            "including position sizing guidance consistent with the rating."
+            "consistent with the rating."
         ),
     )
 
@@ -110,9 +110,14 @@ class TraderProposal(BaseModel):
     """Structured transaction proposal produced by the Trader.
 
     The trader reads the Research Manager's investment plan and the analyst
-    reports, then turns them into a concrete transaction: what action to
-    take, the reasoning that justifies it, and the practical levels for
-    entry, stop-loss, and sizing.
+    reports, then states a direction and the reasoning behind it.
+
+    It deliberately carries **no executable price levels** — no entry price,
+    no stop-loss, no position size. This project is a research and education
+    implementation of the upstream TradingAgents framework, and concrete trade
+    levels for a named security are what turn a research tool into an
+    investment-advisory product. The capability is not shipped here; a
+    downstream fork that wants it can add it under its own responsibility.
     """
 
     action: TraderAction = Field(
@@ -121,20 +126,9 @@ class TraderProposal(BaseModel):
     reasoning: str = Field(
         description=(
             "The case for this action, anchored in the analysts' reports and "
-            "the research plan. Two to four sentences."
+            "the research plan. Two to four sentences. Do not quote specific "
+            "entry, stop-loss or position-size levels."
         ),
-    )
-    entry_price: Optional[float] = Field(
-        default=None,
-        description="Optional entry price target in the instrument's quote currency.",
-    )
-    stop_loss: Optional[float] = Field(
-        default=None,
-        description="Optional stop-loss price in the instrument's quote currency.",
-    )
-    position_sizing: Optional[str] = Field(
-        default=None,
-        description="Optional sizing guidance, e.g. '5% of portfolio'.",
     )
 
 
@@ -145,22 +139,13 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
     preserved for backward compatibility with the analyst stop-signal text
     and any external code that greps for it.
     """
-    parts = [
+    return "\n".join([
         f"**Action**: {proposal.action.value}",
         "",
         f"**Reasoning**: {proposal.reasoning}",
-    ]
-    if proposal.entry_price is not None:
-        parts.extend(["", f"**Entry Price**: {proposal.entry_price}"])
-    if proposal.stop_loss is not None:
-        parts.extend(["", f"**Stop Loss**: {proposal.stop_loss}"])
-    if proposal.position_sizing:
-        parts.extend(["", f"**Position Sizing**: {proposal.position_sizing}"])
-    parts.extend([
         "",
         f"FINAL TRANSACTION PROPOSAL: **{proposal.action.value.upper()}**",
     ])
-    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +160,9 @@ class PortfolioDecision(BaseModel):
     extraction pass is required. Field descriptions double as the model's
     output instructions, so the prompt body only needs to convey context and
     the rating-scale guidance.
+
+    Like :class:`TraderProposal`, this carries no price target and no other
+    executable level — see that class for why.
     """
 
     rating: PortfolioRating = Field(
@@ -185,8 +173,9 @@ class PortfolioDecision(BaseModel):
     )
     executive_summary: str = Field(
         description=(
-            "A concise action plan covering entry strategy, position sizing, "
-            "key risk levels, and time horizon. Two to four sentences."
+            "A concise summary of what drove the rating and the main "
+            "considerations on each side. Two to four sentences. Do not quote "
+            "specific entry, stop-loss, position-size or target-price levels."
         ),
     )
     investment_thesis: str = Field(
@@ -196,13 +185,9 @@ class PortfolioDecision(BaseModel):
             "incorporate them; otherwise rely solely on the current analysis."
         ),
     )
-    price_target: Optional[float] = Field(
-        default=None,
-        description="Optional target price in the instrument's quote currency.",
-    )
     time_horizon: Optional[str] = Field(
         default=None,
-        description="Optional recommended holding period, e.g. '3-6 months'.",
+        description="Optional analysis horizon, e.g. '3-6 months'.",
     )
 
 
@@ -221,8 +206,6 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         "",
         f"**Investment Thesis**: {decision.investment_thesis}",
     ]
-    if decision.price_target is not None:
-        parts.extend(["", f"**Price Target**: {decision.price_target}"])
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
     return "\n".join(parts)

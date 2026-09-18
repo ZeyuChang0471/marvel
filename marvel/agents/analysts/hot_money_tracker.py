@@ -51,7 +51,7 @@ def create_hot_money_tracker(llm):
             "\n6. 综合判断当前资金博弈格局：主力吸筹 / 主力出货 / 游资接力 / 散户主导"
             "\n\n请使用以下工具："
             "\n- `get_stock_data`：获取 K 线和成交量数据"
-            "\n- `get_news(query, start_date, end_date)`：搜索游资/资金流向相关新闻"
+            "\n- `get_news(ticker, start_date, end_date)`：搜索游资/资金流向相关新闻，ticker 必须使用目标股票的 6 位代码"
             "\n- `get_insider_transactions`：获取股东和内部人交易数据"
             "\n- `get_hot_stocks(curr_date)`：获取当日涨停股 + 题材归因 reason tags（同花顺独家）"
             "\n- `get_northbound_flow(curr_date)`：获取北向资金实时分钟级流向（沪股通+深股通累计净买入）"

@@ -1,11 +1,15 @@
+import logging
 import os
 from typing import Any, Optional
 
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 
-from .base_client import BaseLLMClient, normalize_content
+from .base_client import BaseLLMClient, normalize_content, warn_if_truncated
+from .capabilities import get_capabilities
 from .validators import validate_model
+
+logger = logging.getLogger(__name__)
 
 
 class NormalizedChatOpenAI(ChatOpenAI):
@@ -24,11 +28,31 @@ class NormalizedChatOpenAI(ChatOpenAI):
     """
 
     def invoke(self, input, config=None, **kwargs):
-        return normalize_content(super().invoke(input, config, **kwargs))
+        response = super().invoke(input, config, **kwargs)
+        warn_if_truncated(response, self.model_name)
+        return normalize_content(response)
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
-        if method is None:
-            method = "function_calling"
+        capabilities = get_capabilities(self.model_name)
+        if capabilities.preferred_structured_method == "none":
+            raise NotImplementedError(
+                f"{self.model_name} has no structured-output method available"
+            )
+        method = method or capabilities.preferred_structured_method
+        # DeepSeek V4/reasoner accept the schema as a tool, but reject
+        # LangChain's function-spec ``tool_choice`` parameter.
+        # Use pop-and-override rather than setdefault: with setdefault an
+        # explicitly passed tool_choice survives and the API call still fails,
+        # so the declared capability would not actually be enforced.
+        if method == "function_calling" and not capabilities.supports_tool_choice:
+            caller_value = kwargs.pop("tool_choice", None)
+            if caller_value is not None:
+                logger.warning(
+                    "Dropping tool_choice=%r for %s: this model rejects the "
+                    "parameter (see llm_clients/capabilities.py).",
+                    caller_value, self.model_name,
+                )
+            kwargs["tool_choice"] = None
         return super().with_structured_output(schema, method=method, **kwargs)
 
 
@@ -60,10 +84,9 @@ class DeepSeekChatOpenAI(NormalizedChatOpenAI):
        fails with HTTP 400. ``_create_chat_result`` captures the field on
        receive and ``_get_request_payload`` re-attaches it on send.
 
-    2. **deepseek-reasoner has no tool_choice.** Structured output via
-       function-calling is unavailable, so we raise NotImplementedError
-       and let the agent factories fall back to free-text generation
-       (see ``marvel/agents/utils/structured.py``).
+    2. **DeepSeek reasoning models reject ``tool_choice``.** Their schema is
+       still bound as a tool, while the capability-aware base class suppresses
+       only the incompatible request parameter.
     """
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
@@ -94,18 +117,24 @@ class DeepSeekChatOpenAI(NormalizedChatOpenAI):
                 generation.message.additional_kwargs["reasoning_content"] = reasoning
         return chat_result
 
-    def with_structured_output(self, schema, *, method=None, **kwargs):
-        if self.model_name == "deepseek-reasoner":
-            raise NotImplementedError(
-                "deepseek-reasoner does not support tool_choice; structured "
-                "output is unavailable. Agent factories fall back to "
-                "free-text generation automatically."
-            )
-        return super().with_structured_output(schema, method=method, **kwargs)
+class MinimaxChatOpenAI(NormalizedChatOpenAI):
+    """MiniMax M2.x adapter.
+
+    M2.x embeds reasoning in ``<think>`` blocks by default.  The provider's
+    ``reasoning_split`` request flag keeps that internal trace out of the
+    user-facing content that downstream agents store and render.
+    """
+
+    def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        capabilities = get_capabilities(self.model_name)
+        if capabilities.supports_reasoning_split:
+            payload.setdefault("reasoning_split", True)
+        return payload
 
 # Kwargs forwarded from user config to ChatOpenAI
 _PASSTHROUGH_KWARGS = (
-    "timeout", "max_retries", "reasoning_effort",
+    "timeout", "max_retries", "reasoning_effort", "max_tokens",
     "api_key", "callbacks", "http_client", "http_async_client",
 )
 
@@ -145,10 +174,39 @@ class OpenAIClient(BaseLLMClient):
         self.warn_if_unknown_model()
         llm_kwargs = {"model": self.model}
 
+        # Generic OpenAI-compatible relay (#77 / #81): the user supplies the
+        # base_url and model themselves, and the API key comes from a generic
+        # env var. No vendor defaults — this is the escape hatch for any
+        # gateway (9Router, AI Router, self-hosted proxy) that speaks the
+        # OpenAI Chat Completions API.
+        if self.provider == "openai_compatible":
+            if not self.base_url:
+                raise RuntimeError(
+                    "openai_compatible 需要填写 base_url。请在 Web 侧栏「API Base URL」"
+                    "或配置 `backend_url` 里填写你的 OpenAI 兼容网关地址"
+                    "（例如 https://your-relay.example/v1）。"
+                )
+            llm_kwargs["base_url"] = self.base_url
+            # Per-role api_key (from role_llms spec) wins over env vars, so
+            # several OpenAI-compatible gateways with different keys can run
+            # side by side (e.g. opencode-go + a local proxy relay).
+            api_key = (
+                self.kwargs.get("api_key")
+                or os.environ.get("OPENAI_COMPATIBLE_API_KEY")
+                or os.environ.get("OPENAI_API_KEY")
+            )
+            if api_key:
+                llm_kwargs["api_key"] = api_key
+            elif "api_key" not in self.kwargs:
+                raise RuntimeError(
+                    "未找到 openai_compatible 的 API Key。请在 .env 文件或环境变量中设置 "
+                    "`OPENAI_COMPATIBLE_API_KEY=你的key`（也接受 `OPENAI_API_KEY`），"
+                    "设置后重启程序。"
+                )
         # Provider-specific base URL and auth. An explicit base_url on the
         # client (e.g. a corporate proxy) takes precedence over the
         # provider default so users can route through their own gateway.
-        if self.provider in _PROVIDER_CONFIG:
+        elif self.provider in _PROVIDER_CONFIG:
             default_base, api_key_env = _PROVIDER_CONFIG[self.provider]
             llm_kwargs["base_url"] = self.base_url or default_base
             if api_key_env:
@@ -181,7 +239,12 @@ class OpenAIClient(BaseLLMClient):
 
         # DeepSeek's thinking-mode quirks live in their own subclass so the
         # base NormalizedChatOpenAI stays free of provider-specific branches.
-        chat_cls = DeepSeekChatOpenAI if self.provider == "deepseek" else NormalizedChatOpenAI
+        if self.provider == "deepseek":
+            chat_cls = DeepSeekChatOpenAI
+        elif self.provider == "minimax":
+            chat_cls = MinimaxChatOpenAI
+        else:
+            chat_cls = NormalizedChatOpenAI
         return chat_cls(**llm_kwargs)
 
     def validate_model(self) -> bool:
