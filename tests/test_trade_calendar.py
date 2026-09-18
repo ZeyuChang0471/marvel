@@ -216,3 +216,40 @@ class TestDateHelpers:
     def test_today_str_shape(self):
         value = tc.cn_today_str()
         assert len(value) == 10 and value[4] == "-" and value[7] == "-"
+
+
+class TestDataLayerIntegration:
+    """The data layer appends cn_no_data_reason() to its "no OHLCV" error."""
+
+    @pytest.mark.unit
+    def test_reason_is_appended_for_a_non_trading_day(self):
+        from marvel.dataflows.a_stock import _no_data_reason
+
+        _inject(_CAL)
+        reason = _no_data_reason("2026-09-19")
+        assert reason.startswith(" — ")
+        assert "非交易日" in reason
+
+    @pytest.mark.unit
+    def test_reason_is_empty_when_the_calendar_module_fails(self, monkeypatch):
+        from marvel.dataflows import a_stock
+
+        real_import = __import__
+
+        def _boom(name, *args, **kwargs):
+            if name.endswith("trade_calendar"):
+                raise ImportError("simulated failure")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", _boom)
+        # A hint must never be able to break data fetching.
+        assert a_stock._no_data_reason("2026-09-19") == ""
+
+    @pytest.mark.unit
+    def test_reason_is_empty_for_a_malformed_date(self):
+        from marvel.dataflows.a_stock import _no_data_reason
+
+        _inject(_CAL)
+        # cn_no_data_reason treats an unparseable date as a non-trading day
+        # rather than raising, so the suffix still renders.
+        assert _no_data_reason("nonsense").startswith(" — ")

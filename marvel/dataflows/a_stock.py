@@ -737,6 +737,22 @@ def _supplement_stale_ohlcv_with_sina(
 # OHLCV loading with cache (mootdx -> CSV)
 # ---------------------------------------------------------------------------
 
+def _no_data_reason(curr_date: str) -> str:
+    """Calendar-aware suffix for a "no data" error.
+
+    MARVEL addition (see dataflows/trade_calendar.py). Without it, asking for a
+    non-trading day — or for today before the daily bar has closed — surfaces
+    as a bare "no OHLCV data", which reads like a data-source outage and sends
+    the reader looking for a bug that isn't there.
+    """
+    try:
+        from .trade_calendar import cn_no_data_reason
+
+        return " — " + cn_no_data_reason(curr_date)
+    except Exception:  # noqa: BLE001 — a hint must never break data fetching
+        return ""
+
+
 def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
     """Fetch OHLCV via mootdx, cache to CSV, filter by curr_date.
 
@@ -797,7 +813,9 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
             if df.empty:
                 raise ValueError(f"No OHLCV data from sina for {code}")
         except Exception:
-            raise ValueError(f"No OHLCV data from mootdx/sina for {code}")
+            raise ValueError(
+                f"No OHLCV data from mootdx/sina for {code}{_no_data_reason(curr_date)}"
+            )
 
     df, _ = _supplement_stale_ohlcv_with_sina(code, df, curr_date, start_date=None)
 
@@ -857,10 +875,16 @@ def get_stock_data(
         try:
             df = _sina_kline_fallback(code, start_date, end_date)
             if df.empty:
-                return "K线数据获取失败：mootdx和新浪备用源均不可用，请检查网络连接"
+                return (
+                    "K线数据获取失败：mootdx和新浪备用源均不可用，请检查网络连接"
+                    + _no_data_reason(end_date)
+                )
             data_source = "sina HTTP (fallback)"
         except Exception:
-            return "K线数据获取失败：mootdx和新浪备用源均不可用，请检查网络连接"
+            return (
+                "K线数据获取失败：mootdx和新浪备用源均不可用，请检查网络连接"
+                + _no_data_reason(end_date)
+            )
 
     df, supplemented = _supplement_stale_ohlcv_with_sina(code, df, end_date, start_date)
     if supplemented:
