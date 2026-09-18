@@ -3,19 +3,20 @@
 
 <p align="center">
   基于 <a href="https://github.com/TauricResearch/TradingAgents">TauricResearch/TradingAgents</a>（65K ⭐）的 A 股深度特化 fork<br>
-  直接上游：<a href="https://github.com/simonlin1212/tradingagents-astock">simonlin1212/TradingAgents-Astock</a> v0.2.13<br>
-  全 Apache 2.0 开源 · pip install 即跑 · 零外部服务依赖
+  直接上游：<a href="https://github.com/simonlin1212/tradingagents-astock">simonlin1212/TradingAgents-Astock</a> v0.2.13（并移植其至 v0.5.17 的修复）<br>
+  混合许可（Apache 2.0 + PolyForm NC 1.0.0）· pip install 即跑 · 零外部服务依赖
 </p>
 
 <p align="center">
-  <b>⚠️ 免责声明：本项目仅供学习研究与技术演示，不构成任何投资建议。投资决策请咨询持牌专业机构。</b>
+  <b>🚫 本项目仅供非商业的研究与教学使用，禁止商用。</b><br>
+  <b>⚠️ 免责声明：仅供学习研究与技术演示，不构成任何投资建议。投资决策请咨询持牌专业机构。</b>
 </p>
 
 <p align="center">
   <a href="https://github.com/ZeyuChang0471/marvel/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/ZeyuChang0471/marvel?style=social"/></a>
   <a href="https://github.com/ZeyuChang0471/marvel/network/members"><img alt="Forks" src="https://img.shields.io/github/forks/ZeyuChang0471/marvel?style=social"/></a>
   <a href="https://arxiv.org/abs/2412.20138"><img alt="论文" src="https://img.shields.io/badge/论文-arXiv_2412.20138-B31B1B?logo=arxiv"/></a>
-  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-blue"/></a>
+  <a href="./LICENSING.md"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0_%2B_PolyForm_NC_1.0.0-blue"/></a>
   <a href="./CHANGES_FROM_UPSTREAM.md"><img alt="改动记录" src="https://img.shields.io/badge/改动记录-CHANGES-orange"/></a>
 </p>
 
@@ -40,9 +41,9 @@
 
 ## 为什么做这个 Fork
 
-原版 MARVEL 是一个出色的多 Agent 投研框架，但它针对美股设计：数据走 Yahoo Finance / Alpha Vantage，分析师不懂 A 股制度，辩论和决策完全面向美股市场。
+原版 TradingAgents 是一个出色的多 Agent 投研框架，但它针对美股设计：数据走 Yahoo Finance / Alpha Vantage，分析师不懂 A 股制度，辩论和决策完全面向美股市场。
 
-**本 Fork 的目标**：把 MARVEL 的多 Agent 辩论架构真正落地到 A 股，不是简单翻译，而是从数据层、Agent 角色、交易规则三个维度做深度特化。
+**本 Fork 的目标**：把 TradingAgents 的多 Agent 辩论架构真正落地到 A 股，不是简单翻译，而是从数据层、Agent 角色、交易规则三个维度做深度特化。
 
 ### 核心改造
 
@@ -58,9 +59,9 @@
 
 ## 与上游对比
 
-| 特性 | 原版 MARVEL | **本 Fork** |
+| 特性 | 原版 TradingAgents | **本 Fork（MARVEL）** |
 |------|-------------------|-------------|
-| 许可证 | Apache 2.0 | **全 Apache 2.0** |
+| 许可证 | Apache 2.0 | **Apache 2.0 + PolyForm NC 1.0.0（仅限非商业）** |
 | 部署依赖 | pip install | **开箱即用** |
 | A 股数据 | ❌ | **mootdx + 东财 + 新浪 + 同花顺（直连 HTTP）** |
 | A 股特化角色 | ❌ | **政策/游资/解禁 3 个深度角色** |
@@ -363,23 +364,38 @@ MARVEL/
 ## 致谢与代码血缘
 
 ```
-TauricResearch/TradingAgents  ──fork──▶  simonlin1212/TradingAgents-Astock v0.2.13  ──fork──▶  MARVEL
-        （原版框架）                                （A 股特化）                          （本仓库）
+TauricResearch/TradingAgents ──fork──▶ simonlin1212/TradingAgents-Astock ──fork──▶ MARVEL
+     （原版框架 · Apache 2.0）              （A 股特化 · Apache 2.0）          （本仓库 · 混合许可）
+
+KylinMountain/TradingAgents-AShare ──提取──▶ MARVEL
+        （PolyForm Noncommercial 1.0.0）
 ```
 
 - **原版框架**：[TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)，感谢原作者的出色工作与 Apache 2.0 开源精神
-- **直接上游**：[simonlin1212/TradingAgents-Astock](https://github.com/simonlin1212/tradingagents-astock)，本仓库的 A 股数据层与 7 Agent 实现来自该项目 v0.2.13
-- **MARVEL 的增量改动**：见 [NOTICE](./NOTICE) 与 [CHANGES_FROM_UPSTREAM.md](./CHANGES_FROM_UPSTREAM.md)
+- **直接上游**：[simonlin1212/TradingAgents-Astock](https://github.com/simonlin1212/tradingagents-astock)，本仓库的 A 股数据层与 7 Agent 实现来自该项目；基线为 v0.2.13，并已移植其至 v0.5.17 的数据层 / Agent / LLM 客户端修复
+- **代码提取来源**：[KylinMountain/TradingAgents-AShare](https://github.com/KylinMountain/TradingAgents-AShare)，PolyForm Noncommercial 1.0.0；目前仅提取了交易日历/盘中状态模块
+- **MARVEL 的改动**：见 [NOTICE](./NOTICE) 与 [CHANGES_FROM_UPSTREAM.md](./CHANGES_FROM_UPSTREAM.md)
 
-**原始论文**：[MARVEL: Multi-Agents LLM Financial Trading Framework](https://arxiv.org/abs/2412.20138)
+**原始论文**：[TradingAgents: Multi-Agents LLM Financial Trading Framework](https://arxiv.org/abs/2412.20138)
 
 ---
 
 ## 许可证
 
-[Apache License 2.0](./LICENSE)
+**本项目是混合许可项目，且仅限非商业用途。**
 
-本项目继承上游的 Apache 2.0 许可证，保留全部上游版权与归属声明。详见 [NOTICE](./NOTICE)。
+| 来源 | 许可证 |
+|------|--------|
+| TauricResearch/TradingAgents、simonlin1212/TradingAgents-Astock | [Apache License 2.0](./LICENSE) |
+| KylinMountain/TradingAgents-AShare（提取部分） | [PolyForm Noncommercial 1.0.0](./LICENSE-TradingAgents-AShare.txt) |
+| MARVEL 自身贡献 | 仅授权非商业用途 |
+
+**🚫 由于包含 PolyForm Noncommercial 组件，本仓库整体不得用于商业目的。**
+
+> 有一点必须说清：Apache 2.0 已向每一位接收者授予**不可撤销的、含商业使用在内**的许可，
+> 原作者与本仓库都**无权替那部分代码收回该权利**。因此本声明不对 Apache 部分主张
+> 「禁止商用」——那在法律上无效。想要一份可商用的构建，需删除 PolyForm NC 清单中的文件。
+> 完整说明见 **[LICENSING.md](./LICENSING.md)**。
 
 ## 支持上游原作者
 

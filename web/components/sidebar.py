@@ -296,6 +296,35 @@ def _render_llm_config() -> None:
     )
 
 
+def _resolve_analysis_date() -> tuple[date, str]:
+    """Pick the analysis date and explain the choice.
+
+    Defaults to the most recent session whose daily bar already exists. The old
+    behaviour (plain ``date.today()``) launched an analysis of a day the market
+    never traded on weekends and holidays, and the resulting empty report looked
+    like a data-source failure rather than a calendar fact.
+    """
+    from marvel.dataflows.trade_calendar import (
+        cn_market_phase,
+        cn_today_str,
+        latest_cn_trading_day,
+    )
+
+    today = cn_today_str()
+    resolved = latest_cn_trading_day()
+    if resolved == today:
+        note = "今日已收盘"
+    else:
+        phase = cn_market_phase()
+        if phase in ("in_session", "lunch_break"):
+            note = "今日盘中、日线未收盘 → 回退到上一交易日"
+        elif phase == "pre_open":
+            note = "今日尚未开盘 → 回退到上一交易日"
+        else:
+            note = "今日非交易日（A股休市）→ 回退到最近交易日"
+    return date.fromisoformat(resolved), note
+
+
 def render_sidebar() -> None:
     """Render the sidebar with input controls and history."""
 
@@ -324,8 +353,8 @@ def render_sidebar() -> None:
         help="输入6位A股代码或中文股票全称",
     )
 
-    trade_date = date.today()
-    st.caption(f"📅 分析日期：{trade_date.strftime('%Y-%m-%d')}（自动使用当前日期）")
+    trade_date, date_note = _resolve_analysis_date()
+    st.caption(f"📅 分析日期：{trade_date.strftime('%Y-%m-%d')}（{date_note}）")
 
     with st.expander("⚙️ 模型配置", expanded=False):
         _render_llm_config()

@@ -8,7 +8,7 @@ version = "0.2.13"
 description = "MARVEL — Multi-Agent Research & Valuation Engine for Long-short（A股多Agent投研框架）"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "Apache-2.0"}
+license = {text = "Mixed: Apache-2.0 + PolyForm-Noncommercial-1.0.0 (non-commercial use only) — see LICENSING.md"}
 authors = [
     {name = "ZeyuChang0471", email = "ZeyuChang0471@users.noreply.github.com"},
 ]
