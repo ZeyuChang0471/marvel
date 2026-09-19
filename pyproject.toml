@@ -91,6 +91,9 @@ Upstream-Astock = "https://github.com/simonlin1212/tradingagents-astock"
 # httpx is safe in practice.) Reinstating an extra requires resolving that pin.
 dev = [
     "pytest>=8.0",
+    # `tomllib` is stdlib only from Python 3.11 (PEP 680); the docs-consistency
+    # test parses pyproject.toml, so 3.10 needs the backport.
+    'tomli>=2.0; python_version < "3.11"',
 ]
 
 [project.scripts]

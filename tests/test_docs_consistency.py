@@ -22,10 +22,14 @@ from __future__ import annotations
 
 import json
 import re
-import tomllib
 from pathlib import Path
 
 import pytest
+
+try:  # tomllib is stdlib only from 3.11 (PEP 680)
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
+    import tomli as tomllib  # type: ignore[no-redef]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -476,6 +480,141 @@ class TestPromptFactsAgree:
         assert len(table_lines) == len(REPORT_FIELDS), (
             f"输出表格只有 {len(table_lines)} 行，应为 {len(REPORT_FIELDS)} 行"
         )
+
+
+# ---------------------------------------------------------------------------
+# Python 3.10 compatibility
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestPython310Compatibility:
+    """`requires-python = ">=3.10"` 是承诺，CI 的 3.10 那条腿是唯一的执行者。
+
+    `tomllib` 只在 3.11+ 存在（PEP 680）。`tests/test_docs_consistency.py` 一开始
+    无条件 import 它，结果是**只有 Python 3.10 的 CI 失败**（pytest 退出码 2，
+    收集期报错），3.11/3.12/3.13 全绿——一个本地跑多少次都看不到的失败。
+    """
+
+    #: stdlib 模块 -> 引入它的最低 Python 版本
+    _MIN_VERSION = {
+        "tomllib": (3, 11),
+    }
+
+    def _python_files(self) -> list[Path]:
+        skip = {"venv", "__pycache__", ".pytest_tmp", ".git"}
+        paths: list[Path] = []
+        for root in ("marvel", "cli", "web", "scripts", "examples", "tests"):
+            paths += list((REPO_ROOT / root).rglob("*.py"))
+        paths += [REPO_ROOT / name for name in ("run.py", "run_single.py")]
+        return [
+            p for p in paths
+            if p.exists() and not any(part in skip for part in p.parts)
+        ]
+
+    @staticmethod
+    def _imports(tree: "ast.Module") -> list[tuple[str, int, bool]]:
+        """Yield ``(top_level_module, lineno, guarded_by_ImportError)``."""
+        import ast
+
+        guard_names = {"ImportError", "ModuleNotFoundError"}
+
+        def handles_import_error(node: ast.Try) -> bool:
+            for handler in node.handlers:
+                node_type = handler.type
+                if isinstance(node_type, ast.Name) and node_type.id in guard_names:
+                    return True
+                if isinstance(node_type, ast.Tuple) and any(
+                    isinstance(e, ast.Name) and e.id in guard_names
+                    for e in node_type.elts
+                ):
+                    return True
+            return False
+
+        found: list[tuple[str, int, bool]] = []
+
+        def visit(node: ast.AST, guarded: bool) -> None:
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, ast.Try):
+                    inner = guarded or handles_import_error(child)
+                    for sub in child.body:
+                        visit(sub, inner)
+                    for sub in child.orelse + child.finalbody:
+                        visit(sub, guarded)
+                    for handler in child.handlers:
+                        for sub in handler.body:
+                            visit(sub, guarded)
+                    continue
+                if isinstance(child, ast.Import):
+                    for alias in child.names:
+                        found.append(
+                            (alias.name.split(".")[0], child.lineno, guarded)
+                        )
+                elif (
+                    isinstance(child, ast.ImportFrom)
+                    and child.module
+                    and child.level == 0
+                ):
+                    found.append((child.module.split(".")[0], child.lineno, guarded))
+                visit(child, guarded)
+
+        visit(tree, False)
+        return found
+
+    def test_no_python_311_only_stdlib_import_without_a_fallback(self):
+        """3.11+ 才有的 stdlib 模块必须包在 try/except ImportError 里。"""
+        import ast
+
+        offenders = []
+        for path in self._python_files():
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for module, lineno, guarded in self._imports(tree):
+                if module in self._MIN_VERSION and not guarded:
+                    needed = ".".join(str(v) for v in self._MIN_VERSION[module])
+                    offenders.append(
+                        f"{path.relative_to(REPO_ROOT)}:{lineno}: "
+                        f"import {module}（需要 Python {needed}，未加 try/except 回退）"
+                    )
+
+        assert not offenders, (
+            "这些 import 在 Python 3.10 上会直接让测试收集失败：\n  "
+            + "\n  ".join(offenders)
+        )
+
+    def test_all_sources_parse_under_python_310_grammar(self):
+        """语法层也不能用 3.10 之后才有的写法。"""
+        import ast
+
+        offenders = []
+        for path in self._python_files():
+            try:
+                ast.parse(
+                    path.read_text(encoding="utf-8"),
+                    filename=str(path),
+                    feature_version=(3, 10),
+                )
+            except SyntaxError as exc:
+                offenders.append(
+                    f"{path.relative_to(REPO_ROOT)}:{exc.lineno}: {exc.msg}"
+                )
+
+        assert not offenders, (
+            "这些文件不符合 Python 3.10 语法：\n  " + "\n  ".join(offenders)
+        )
+
+    def test_the_tomllib_fallback_is_actually_installed_for_310(self):
+        """回退分支要真的可装：dev extra 必须带 3.10 的 tomli。"""
+        dev = self._pyproject()["project"]["optional-dependencies"]["dev"]
+        joined = " ".join(dev)
+        assert "tomli" in joined, (
+            "tests 依赖 tomllib（3.11+），dev extra 必须为 3.10 提供 tomli 回退"
+        )
+        assert 'python_version < "3.11"' in joined, (
+            "tomli 必须带 python_version 标记，否则会在 3.11+ 上白装一个包"
+        )
+
+    def _pyproject(self) -> dict:
+        return tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 
 # ---------------------------------------------------------------------------

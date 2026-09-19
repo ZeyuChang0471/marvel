@@ -119,9 +119,14 @@ Breaking changes within the 0.x line are called out explicitly.
 
 ### Tests
 
-- 371 → 488 个通过用例。新增 `test_docs_consistency.py`（20+ 条把文档与代码钉在一起的
-  检查，含「导入即执行」的 AST 扫描）、`test_example_artifacts.py`、`test_llm_factory.py`、
-  `test_em_throttle.py`、`test_return_resolution.py`，以及 look-ahead / rating 的回归矩阵。
+- 371 → 495 个通过用例。新增 `test_docs_consistency.py`（30+ 条把文档与代码钉在一起的
+  检查，含「导入即执行」的 AST 扫描与 Python 3.10 兼容检查）、`test_example_artifacts.py`、
+  `test_llm_factory.py`、`test_em_throttle.py`、`test_return_resolution.py`，
+  以及 look-ahead / rating 的回归矩阵。
+- CI 的 **Python 3.10** 一条腿抓到 `tests/test_docs_consistency.py` 无条件 `import tomllib`
+  （PEP 680，仅 3.11+ 有）——本地跑 3.13 永远看不到，3.11/3.12/3.13 也全绿。已加 `tomli`
+  回退（dev extra 带 `python_version < "3.11"` 标记），并补两条守卫：3.11+ stdlib 必须包在
+  `try/except ImportError` 里、全部源码须符合 3.10 语法。
 
 ## [0.2.13] — 2026-06-04
 
