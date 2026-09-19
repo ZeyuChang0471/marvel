@@ -100,9 +100,9 @@ Breaking changes within the 0.x line are called out explicitly.
   `streamlit run web/launch.py`、项目结构树**全部对齐代码；`web/components/sidebar.py`
   里对用户显示的「7 个 Analyst」也一并修正。
 - **README 删除「支持上游原作者」捐赠段**（微信赞赏码 + 爱发电 / Buy Me a Coffee），
-  并把写死的「65K Stars」换成 shields.io 实时徽章——实测该数字已 **107,495**，写死必然
-  过期。上游**归属**不受影响，仍保留在 README「致谢与代码血缘」、`NOTICE` 与
-  `LICENSING.md`（Apache-2.0 §4 要求随分发保留）。
+  连同已无人引用的 `assets/wechat-sponsor.jpg`，并把写死的「65K Stars」换成 shields.io
+  实时徽章——实测该数字已 **107,495**，写死必然过期。上游**归属**不受影响，仍保留在
+  README「致谢与代码血缘」、`NOTICE` 与 `LICENSING.md`（Apache-2.0 §4 要求随分发保留）。
 - **`CHANGELOG.md` 标注为继承自上游**并说明旧路径/环境变量；`CHANGES_FROM_UPSTREAM.md`
   与 `DEV_LOG.md` 加上「计数与包名已过时」的说明；`issues/` 标注为上游归档。
 - **根目录不再有 import 即执行的脚本**：`test_astock.py` / `test_data_quality.py` /

@@ -400,6 +400,12 @@ class TestNoStaleExternalFacts:
         for marker in ("支持上游原作者", "赞赏码", "Buy Me a Coffee", "爱发电", "ifdian.net"):
             assert marker not in src, f"README 仍包含捐赠相关内容: {marker}"
 
+        # 赞赏码图片本身也随该节删除；否则仓库里会留一个没人引用的捐赠资产。
+        sponsor_img = REPO_ROOT / "assets" / "wechat-sponsor.jpg"
+        assert not sponsor_img.exists(), (
+            f"{sponsor_img.relative_to(REPO_ROOT)} 已不再被任何文档引用，应一并删除"
+        )
+
     def test_upstream_attribution_is_still_present(self):
         """删掉募捐段不等于删掉归属：Apache-2.0 §4 要求随分发保留。"""
         readme = _read("README.md")
