@@ -22,9 +22,11 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v4
+      # node24-based majors. v4/v5 ran on Node 20, which GitHub force-migrated to
+      # Node 24 and reported as a deprecation warning on every run.
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip

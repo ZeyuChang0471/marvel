@@ -105,6 +105,11 @@ Breaking changes within the 0.x line are called out explicitly.
   README「致谢与代码血缘」、`NOTICE` 与 `LICENSING.md`（Apache-2.0 §4 要求随分发保留）。
 - **`CHANGELOG.md` 标注为继承自上游**并说明旧路径/环境变量；`CHANGES_FROM_UPSTREAM.md`
   与 `DEV_LOG.md` 加上「计数与包名已过时」的说明；`issues/` 标注为上游归档。
+- **清掉零引用的图片资产**：`assets/wechat-sponsor.jpg`（随捐赠段移除）以及 5 张旧流水线
+  的角色图 `analyst.png` / `researcher.png` / `risk.png` / `schema.png` / `trader.png`
+  ——它们画的是 7 分析师时代的架构，README 早已不再引用。
+- **CI 的 action 升到 Node 24 版本**：`actions/checkout@v4 → @v5`、
+  `actions/setup-python@v5 → @v6`，清掉每次运行都出现的 Node 20 弃用告警。
 - **根目录不再有 import 即执行的脚本**：`test_astock.py` / `test_data_quality.py` /
   `test.py` 移为 `scripts/probe_*.py`（加 `__main__` 守卫），`main.py`（上游美股 demo，
   模块层跑一次 NVDA 分析）删除，`run.py` / `run_single.py` 的全部模块层副作用

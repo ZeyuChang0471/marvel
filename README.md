@@ -8,9 +8,8 @@
 </p>
 
 <p align="center">
-  <b>🚫 本项目仅供非商业的研究与教学使用。</b><br>
-  由于包含 PolyForm-Noncommercial-1.0.0 组件，<b>整体不可商用</b>；但继承自上游的
-  Apache-2.0 代码仍可依 Apache 条款商用——逐组件边界见 <a href="./LICENSING.md">LICENSING.md</a>。<br>
+  <b>🚫 本项目仅供非商业的研究与教学使用，禁止商用。</b><br>
+  许可构成见 <a href="./LICENSING.md">LICENSING.md</a>。<br>
   <b>⚠️ 免责声明：仅供学习研究与技术演示，不构成任何投资建议。投资决策请咨询持牌专业机构。</b>
 </p>
 
