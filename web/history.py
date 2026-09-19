@@ -16,12 +16,21 @@ from marvel.default_config import DEFAULT_CONFIG
 
 logger = logging.getLogger(__name__)
 
-_INCOMPLETE_TASKS_FILE = Path.home() / ".marvel" / "incomplete_tasks.json"
+# Both paths come from the config rather than being hardcoded to ~/.marvel:
+# `default_config.py` documents MARVEL_RESULTS_DIR and MARVEL_CACHE_DIR as
+# overrides, so a deployment that relocated its output wrote analyses to the
+# configured directory while the sidebar's history list stayed permanently
+# empty — with no error to explain why.
+_INCOMPLETE_TASKS_FILE = (
+    Path(DEFAULT_CONFIG["data_cache_dir"]).expanduser().parent
+    / "incomplete_tasks.json"
+)
 _INCOMPLETE_TASKS_LOCK = threading.Lock()
 
 
 def _results_dir() -> Path:
-    return Path.home() / ".marvel" / "logs"
+    """Where saved analyses live (honours MARVEL_RESULTS_DIR)."""
+    return Path(DEFAULT_CONFIG["results_dir"]).expanduser()
 
 
 def get_history() -> list[dict[str, str]]:

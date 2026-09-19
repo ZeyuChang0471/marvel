@@ -4,7 +4,14 @@ from typing import List, Optional
 from pathlib import Path
 import re
 
-from marvel.agents.utils.rating import parse_rating
+from marvel.agents.utils.rating import parse_rating_explicit
+
+
+# Tag value used when the decision text carries no recognisable rating.
+# Writing a fabricated "Hold" here would be worse than useless: the tag is
+# re-injected into later runs as a prior lesson, so a parse failure would be
+# replayed forever as "we called Hold on this name" — invisible in the report.
+_UNPARSED_RATING = "unparsed"
 
 
 class TradingMemoryLog:
@@ -34,7 +41,12 @@ class TradingMemoryLog:
         trade_date: str,
         final_trade_decision: str,
     ) -> None:
-        """Append pending entry at end of propagate(). No LLM call."""
+        """Append pending entry at end of propagate(). No LLM call.
+
+        The rating in the tag comes from :func:`parse_rating_explicit`, so an
+        unreadable decision is tagged ``unparsed`` rather than being recorded
+        as a Hold the model never made.
+        """
         if not self._log_path:
             return
         # Idempotency guard: fast raw-text scan instead of full parse
@@ -43,7 +55,7 @@ class TradingMemoryLog:
             for line in raw.splitlines():
                 if line.startswith(f"[{trade_date} | {ticker} |") and line.endswith("| pending]"):
                     return
-        rating = parse_rating(final_trade_decision)
+        rating = parse_rating_explicit(final_trade_decision) or _UNPARSED_RATING
         tag = f"[{trade_date} | {ticker} | {rating} | pending]"
         entry = f"{tag}\n\nDECISION:\n{final_trade_decision}{self._SEPARATOR}"
         with open(self._log_path, "a", encoding="utf-8") as f:

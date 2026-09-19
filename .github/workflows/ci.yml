@@ -17,7 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        # 3.13 is included because it is what a current local venv gets, and
+        # `requires-python` has no upper bound.
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -32,11 +34,29 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
+      - name: Check the dependency set is self-consistent
+        # Would have surfaced the `[google]` extra being unsatisfiable next to
+        # mootdx's `httpx>=0.25,<0.26` pin, and any newly broken transitive pin.
+        run: pip check
+
       - name: Run tests
         env:
-          # Tests are offline: tests/conftest.py stubs every provider client.
-          # These placeholders only keep accidental client construction from
-          # blocking on an interactive prompt.
+          # Tests are offline: tests/conftest.py stubs every provider client and
+          # blocks outbound sockets. These placeholders only keep accidental
+          # client construction from blocking on an interactive prompt.
           OPENAI_API_KEY: placeholder
           DEEPSEEK_API_KEY: placeholder
+        # `tests/` also enforces the repository's own consistency:
+        #   test_docs_consistency.py  — README/CLAUDE/NOTICE/licence vs the code
+        #   test_example_artifacts.py — no committed report ships price levels
         run: pytest tests/ -q
+
+      - name: Confirm nothing is left uncollected at the repository root
+        # The root used to ship `test_astock.py` / `test.py` / `test_data_quality.py`
+        # with live billed LLM calls at module level, so pytest collection itself
+        # spent money. They are manual probes under scripts/ now.
+        run: |
+          if ls test_*.py 2>/dev/null; then
+            echo "::error::root-level test_*.py found; move manual probes to scripts/"
+            exit 1
+          fi

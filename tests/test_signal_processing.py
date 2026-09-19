@@ -10,7 +10,11 @@ to it.
 
 import pytest
 
-from marvel.agents.utils.rating import RATINGS_5_TIER, parse_rating
+from marvel.agents.utils.rating import (
+    RATINGS_5_TIER,
+    parse_rating,
+    parse_rating_explicit,
+)
 from marvel.graph.signal_processing import SignalProcessor
 
 
@@ -240,6 +244,97 @@ class TestParseRatingWordBoundary:
     )
     def test_rating_value_boundary_matrix(self, text, expected):
         assert parse_rating(text) == expected
+
+
+@pytest.mark.unit
+class TestParseRatingLabelAuthority:
+    """一份文档里有多个评级标签时，只有最权威的那个能赢。
+
+    Regression: 解析器原先是「最左命中就返回」，于是一份先复述上游结论、
+    再给出自己裁决的 PM 备忘录
+
+        研究经理上一轮的投资建议：增持 … 最终评级：卖出
+
+    会被解析成 Overweight。报告正文看起来完全正常，而这个被改写的评级会写进
+    记忆日志、再作为「过往教训」注入该股票之后每一次运行——静默且持久。
+    """
+
+    def test_quoted_advice_does_not_override_cn_verdict(self):
+        text = (
+            "研究经理上一轮的投资建议：增持，理由是估值便宜。\n"
+            "但综合解禁压力与北向流出，\n"
+            "最终评级：卖出\n"
+            "核心结论：风险尚未出清。"
+        )
+        assert parse_rating(text) == "Sell"
+
+    def test_earlier_rating_label_does_not_override_cn_verdict(self):
+        assert parse_rating("投资评级：买入\n\n综合风险后，最终评级：减持。") == "Underweight"
+
+    def test_bold_rating_header_is_treated_as_a_verdict(self):
+        """render_pm_decision() 写出的 ``**Rating**:`` 是机器生成的权威标签。
+
+        它必须能压过后文里被引用的建议型标签。
+        """
+        text = (
+            "研究经理上周给出的投资建议：增持。\n\n"
+            "**Rating**: Sell\n\n"
+            "**Investment Thesis**: 毛利率承压。"
+        )
+        assert parse_rating(text) == "Sell"
+
+    def test_plain_rating_label_beats_cn_advice_label(self):
+        assert parse_rating("投资建议：买入\n\nRating: Underweight") == "Underweight"
+
+    def test_same_rank_last_occurrence_wins(self):
+        # 同级标签取最后一次出现——结论写在讨论之后。
+        assert parse_rating("评级：买入\n\n评级：卖出") == "Sell"
+
+    def test_verdict_label_beats_advice_label(self):
+        assert parse_rating("最终投资建议：买入\n\n最终评级：卖出") == "Sell"
+
+    def test_labelled_rating_still_beats_bare_prose_term(self):
+        # 正文里的裸词（大股东减持）不能盖过带标签的结论。
+        assert parse_rating("需警惕大股东减持压力。\n最终评级：买入") == "Buy"
+
+    def test_single_label_documents_are_unaffected(self):
+        # 只有一条标签时，新旧规则结果必须完全一致。
+        assert parse_rating("**Rating**: Buy\n\nThesis.") == "Buy"
+        assert parse_rating("最终评级：卖出") == "Sell"
+        assert parse_rating("投资建议：Overweight") == "Overweight"
+
+
+@pytest.mark.unit
+class TestParseRatingExplicit:
+    """``parse_rating_explicit`` 绝不能凭空造一个评级出来。
+
+    记忆日志依赖这个区分：把「解析失败」写成 Hold，等于永远把一次读取失败
+    当成模型的真实判断回放给后续运行。
+    """
+
+    def test_returns_none_when_no_rating_is_stated(self):
+        assert parse_rating_explicit("No clear directional signal at this time.") is None
+
+    def test_returns_none_for_empty_input(self):
+        assert parse_rating_explicit("") is None
+        assert parse_rating_explicit(None) is None
+
+    def test_returns_the_stated_rating(self):
+        assert parse_rating_explicit("**Rating**: Overweight") == "Overweight"
+        assert parse_rating_explicit("最终评级：卖出") == "Sell"
+
+    def test_genuine_hold_is_distinguishable_from_no_rating(self):
+        assert parse_rating_explicit("最终评级：持有") == "Hold"
+        assert parse_rating_explicit("Plain prose without a recommendation.") is None
+
+    def test_operating_is_not_mistaken_for_a_rating_label(self):
+        """``operating`` 含有子串 ``rating``，标签正则必须锚在词边界上。"""
+        assert parse_rating_explicit("operating margin: 25%") is None
+        assert parse_rating_explicit("Operating: Buy-back completed") is None
+
+    def test_parse_rating_still_substitutes_the_default(self):
+        assert parse_rating("Plain prose.") == "Hold"
+        assert parse_rating("Plain prose.", default="") == ""
 
 
 @pytest.mark.unit

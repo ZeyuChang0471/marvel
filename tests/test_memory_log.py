@@ -5,6 +5,7 @@ import pandas as pd
 from unittest.mock import MagicMock, patch
 
 from marvel.agents.utils.memory import TradingMemoryLog
+from marvel.agents.utils.rating import parse_rating
 from marvel.agents.schemas import PortfolioDecision, PortfolioRating
 from marvel.graph.reflection import Reflector
 from marvel.graph.trading_graph import MarvelGraph
@@ -170,9 +171,24 @@ class TestTradingMemoryLogCore:
         log.store_decision("AAPL", "2026-01-11", DECISION_OVERWEIGHT)
         assert log.load_entries()[0]["rating"] == "Overweight"
 
-    def test_rating_fallback_hold(self, tmp_path):
+    def test_unparsed_rating_is_not_recorded_as_hold(self, tmp_path):
+        """A decision we cannot read must not be tagged as a genuine Hold.
+
+        The tag is re-injected into later runs as a prior lesson, so storing the
+        parser's fallback value there made "the model said Hold" and "we could
+        not read the answer" indistinguishable — permanently, and invisibly.
+
+        Replaces the old ``test_rating_fallback_hold``, which pinned the
+        fabricated "Hold".
+        """
         log = make_log(tmp_path)
         log.store_decision("MSFT", "2026-01-12", DECISION_NO_RATING)
+        assert log.load_entries()[0]["rating"] == "unparsed"
+
+    def test_genuine_hold_is_still_recorded_as_hold(self, tmp_path):
+        """The unparsed sentinel must not swallow a real Hold call."""
+        log = make_log(tmp_path)
+        log.store_decision("MSFT", "2026-01-13", "Rating: Hold\nHold the position.")
         assert log.load_entries()[0]["rating"] == "Hold"
 
     def test_rating_priority_over_prose(self, tmp_path):
@@ -641,6 +657,28 @@ class TestPortfolioManagerInjection:
         pm_node = create_portfolio_manager(llm)
         result = pm_node(_make_pm_state())
         assert result["final_trade_decision"] == plain_response
+
+    def test_pm_freetext_fallback_with_typed_content_blocks_is_parseable(self):
+        """Providers that answer with typed blocks return ``content`` as a *list*.
+
+        The fallback builds the string that becomes ``final_trade_decision``,
+        and the rating parser calls ``.splitlines()`` on it. An unnormalised
+        list therefore crashed the run only *after* the entire multi-agent
+        pipeline had finished — the most expensive possible place to fail.
+        """
+        llm = MagicMock()
+        llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
+        llm.invoke.return_value = MagicMock(content=[
+            {"type": "reasoning", "text": "internal chain of thought"},
+            {"type": "text", "text": "**Rating**: Sell\n\nExit ahead of guidance."},
+        ])
+        pm_node = create_portfolio_manager(llm)
+        result = pm_node(_make_pm_state())
+
+        decision = result["final_trade_decision"]
+        assert isinstance(decision, str)
+        assert decision == "**Rating**: Sell\n\nExit ahead of guidance."
+        assert parse_rating(decision) == "Sell"
 
     # get_past_context ordering and limits
 

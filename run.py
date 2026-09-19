@@ -10,31 +10,21 @@
 前置条件:
   - .env 中已填写 DEEPSEEK_API_KEY=sk-xxxx
   - Python 3.10+ 虚拟环境已激活（venv/）
+
+注意：本文件在 import 时**不做任何事**。此前的版本在模块层就重配 stdio、
+  `set_config()`、打印 banner、检查 key 并在缺失时 `sys.exit(1)`——import 它
+  （IDE 打开、pytest 收集、被别的脚本引用）会直接终止进程。全部逻辑现在都在
+  `main()` 里，只有 `python run.py` 才会执行。
 """
 
-import io
-import os
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 
-# ── 0. Windows 控制台 UTF-8 编码修复 ──────────────────────────────────────
-if sys.platform == "win32":
-    for _stream in (sys.stdout, sys.stderr):
-        try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
-    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
-
-# ── 0. 确保 .env 已加载 ────────────────────────────────────────────────
-from dotenv import load_dotenv
-
 _PROJECT_ROOT = Path(__file__).resolve().parent
-load_dotenv(_PROJECT_ROOT / ".env")
 
-# ── 1. 预设配置：DeepSeek V4 Pro + V4 Flash + 中文输出 ──────────────────
-from marvel.dataflows.config import set_config
-
+# ── 预设配置：DeepSeek V4 Pro + V4 Flash + 中文输出 ──────────────────────
 CONFIG_OVERRIDES = {
     "llm_provider": "deepseek",
     "deep_think_llm": "deepseek-v4-pro",
@@ -43,69 +33,118 @@ CONFIG_OVERRIDES = {
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
 }
-set_config(CONFIG_OVERRIDES)
-
-print("=" * 60)
-print("  MARVEL — DeepSeek 配置")
-print("=" * 60)
-print(f"  供应商:    {CONFIG_OVERRIDES['llm_provider']}")
-print(f"  深度思考:  {CONFIG_OVERRIDES['deep_think_llm']}")
-print(f"  快速思考:  {CONFIG_OVERRIDES['quick_think_llm']}")
-print(f"  输出语言:  {CONFIG_OVERRIDES['output_language']}")
-print("=" * 60)
-
-# ── 2. 检查 API Key ────────────────────────────────────────────────────
-api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-if not api_key:
-    print()
-    print("❌ 未找到 DEEPSEEK_API_KEY！")
-    print("   请在项目根目录的 .env 文件中填入：DEEPSEEK_API_KEY=sk-你的key")
-    print("   然后重新运行。")
-    sys.exit(1)
-
-print(f"  API Key:    {api_key[:12]}...{api_key[-4:]}")
-print()
 
 
-# ── 3. 命令分发 ─────────────────────────────────────────────────────────
-def run_cli():
+def _configure_stdio() -> None:
+    """Windows 控制台 UTF-8 编码修复。
+
+    ``sys.stdin`` 在 ``pythonw.exe`` / 管道关闭时可能是 None，所以三路都要判空。
+    """
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr, sys.stdin):
+        if stream is None:
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 — 编码修复失败不该阻断运行
+            pass
+
+
+def _load_config() -> dict:
+    """加载 .env、应用预设配置，返回当前 config。"""
+    from dotenv import load_dotenv
+
+    from marvel.dataflows.config import get_config, set_config
+
+    load_dotenv(_PROJECT_ROOT / ".env")
+    set_config(CONFIG_OVERRIDES)
+    return get_config()
+
+
+def _print_banner(config: dict) -> None:
+    print("=" * 60)
+    print("  MARVEL — DeepSeek 配置")
+    print("=" * 60)
+    print(f"  供应商:    {config['llm_provider']}")
+    print(f"  深度思考:  {config['deep_think_llm']}")
+    print(f"  快速思考:  {config['quick_think_llm']}")
+    print(f"  输出语言:  {config['output_language']}")
+    print("=" * 60)
+
+
+def _require_api_key() -> str:
+    """确认 DEEPSEEK_API_KEY 存在；缺失时给出可执行的提示并退出。
+
+    只用变量名报警，**绝不打印 key 片段**——此前这里会打印
+    ``api_key[:12]...{api_key[-4:]}``，十几个真实密钥字符会留在终端 scrollback、
+    启动脚本日志与 CI 记录里。项目自己的惯例是只显示末四位（见
+    ``web/components/sidebar.py::_mask_key``）。
+    """
+    import os
+
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not api_key:
+        print()
+        print("❌ 未找到 DEEPSEEK_API_KEY！")
+        print("   请在项目根目录的 .env 文件中填入：DEEPSEEK_API_KEY=sk-你的key")
+        print("   然后重新运行。")
+        raise SystemExit(1)
+    print("  API Key:   已配置（来自 .env 或环境变量）")
+    return api_key
+
+
+# ── 命令实现 ────────────────────────────────────────────────────────────
+
+
+def run_cli() -> None:
     """CLI 交互模式：手动选择股票和分析参数。"""
     from cli.main import app
+
     # typer 会接管交互，我们在前面已经预设了 config
     app()
 
 
-def run_test():
-    """快速测试：用贵州茅台 600519 跑通主流程。"""
-    from marvel.graph.trading_graph import MarvelGraph
-    from marvel.dataflows.config import get_config
+def run_test() -> dict:
+    """快速测试：用贵州茅台 600519 跑通主流程。
+
+    走与 Web UI 相同的驱动路径（``prepare_graph_run`` → stream →
+    ``finalize_graph_run``）。此前这里直接调 ``propagator.create_initial_state``
+    和 ``graph._log_state``，绕过了 checkpoint / 记忆日志 / 断点清理——即 CLI
+    那条路径的老问题，只是没人报错。
+    """
     from datetime import date
 
-    config = get_config()
+    from marvel.graph.trading_graph import MarvelGraph
+
+    config = _load_config()
     ticker = "600519"
     analysis_date = date.today().strftime("%Y-%m-%d")
 
     print(f"\n🚀 开始测试分析: {ticker} ({analysis_date})")
     print(f"   深度思考模型: {config['deep_think_llm']}")
     print(f"   快速思考模型: {config['quick_think_llm']}")
-    print(f"   输出语言: {config['output_language']}")
+    print(f"   输出语言:    {config['output_language']}")
     print()
 
     graph = MarvelGraph(debug=True, config=config)
+    try:
+        init_state, args, _ = graph.prepare_graph_run(ticker, analysis_date)
 
-    init_state = graph.propagator.create_initial_state(ticker, analysis_date)
-    args = graph.propagator.get_graph_args()
-
-    last_chunk = {}
-    for chunk in graph.graph.stream(init_state, **args):
-        last_chunk = chunk
-        # 打印阶段完成提示
-        for key in chunk:
-            if key == "final_trade_decision" and chunk[key]:
+        last_chunk: dict = {}
+        for chunk in graph.graph.stream(init_state, **args):
+            last_chunk = chunk
+            if chunk.get("final_trade_decision"):
                 print("\n✅ 分析完成！最终决策已生成。")
-                break
 
-    # 打印最终结果
+        if not last_chunk:
+            raise RuntimeError("分析没有返回任何结果")
+
+        # 落盘 + 写入记忆日志 + 清理断点，都在这一步里完成
+        signal = graph.finalize_graph_run(ticker, analysis_date, last_chunk)
+    finally:
+        graph.close_graph_run()
+
     final_decision = last_chunk.get("final_trade_decision", "")
     if final_decision:
         print("\n" + "=" * 60)
@@ -113,15 +152,12 @@ def run_test():
         print("=" * 60)
         print(final_decision[:2000])
 
-    signal = graph.process_signal(final_decision)
-    graph._log_state(analysis_date, last_chunk)
     print(f"\n📊 评级: {signal}")
-    print(f"📁 日志目录: {config['results_dir']}/{ticker}/{analysis_date}/")
-
+    print(f"📁 日志目录: {config['results_dir']}/{ticker}/marvel_strategy_logs/")
     return last_chunk
 
 
-def run_web():
+def run_web() -> None:
     """启动 Streamlit Web UI。"""
     from streamlit.web import cli as stcli
 
@@ -133,21 +169,35 @@ def run_web():
     stcli.main()
 
 
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        cmd = sys.argv[1].lower()
-    else:
-        cmd = "cli"
+def main() -> None:
+    """入口：解析命令、准备配置、分发。"""
+    _configure_stdio()
+    config = _load_config()
 
-    if cmd == "web":
+    command = sys.argv[1].lower() if len(sys.argv) > 1 else "cli"
+
+    if command in ("--help", "-h", "help"):
+        print(__doc__)
+        return
+
+    _print_banner(config)
+
+    if command == "web":
+        # Web UI 在侧边栏自己管 key，这里不拦
         run_web()
-    elif cmd == "test":
+    elif command == "test":
+        _require_api_key()
+        print()
         run_test()
-    elif cmd == "cli":
+    elif command == "cli":
+        _require_api_key()
+        print()
         run_cli()
-    elif cmd in ("--help", "-h", "help"):
-        print(__doc__)
     else:
-        print(f"未知命令: {cmd}")
+        print(f"未知命令: {command}")
         print(__doc__)
-        sys.exit(1)
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

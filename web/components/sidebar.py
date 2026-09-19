@@ -266,7 +266,7 @@ def _render_llm_config() -> None:
         provider_key,
         "quick",
         help_text=(
-            "承载绝大多数调用：7 个 Analyst、质量门控、Bull/Bear 研究员、Trader、"
+            "承载绝大多数调用：9 个 Analyst、质量门控、Bull/Bear 研究员、Trader、"
             "三方风险辩论、交易反思与评级提取。速度优先。"
         ),
     )

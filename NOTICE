@@ -18,10 +18,20 @@ MARVEL is a MIXED-LICENSE project and is published for NON-COMMERCIAL use only.
   PolyForm Noncommercial License 1.0.0
     Covers the code taken from KylinMountain/TradingAgents-AShare, currently:
       marvel/dataflows/trade_calendar.py
+      marvel/agents/analysts/volume_price_analyst.py
+      marvel/agents/analysts/macro_analyst.py
+      marvel/agents/utils/debate_utils.py
     Copyright (c) 2026 KylinMountain / TradingAgents-AShare Team
     https://github.com/KylinMountain/TradingAgents-AShare
     Required Notice: Copyright (c) 2026 KylinMountain / TradingAgents-AShare Team
     See LICENSE-TradingAgents-AShare.txt.
+
+    This list must stay identical to the one in LICENSING.md and to the
+    "Components taken into MARVEL" block inside
+    LICENSE-TradingAgents-AShare.txt. It previously named only
+    trade_calendar.py while those two files named four — i.e. the distributed
+    licence text listed files this NOTICE did not, which is exactly the kind of
+    discrepancy a Required Notice cannot afford.
 
 Because a PolyForm Noncommercial component is present, the repository as a
 whole may not be used commercially. Note that this cannot — and does not —
@@ -60,6 +70,13 @@ UPSTREAM ATTRIBUTION
 ==============================================================================
 MODIFICATIONS
 ==============================================================================
+
+Every file inherited from the upstream projects has been changed by MARVEL:
+the package was renamed (`tradingagents` -> `marvel`), and imports, packaging,
+entry points and paths were rewritten throughout. This blanket statement is the
+prominent change notice required by Section 4(b) of the Apache License,
+Version 2.0; the substantive changes are enumerated below and in
+CHANGES_FROM_UPSTREAM.md.
 
 Inherited from TradingAgents-Astock (v0.2.13):
   - A-stock (China mainland) data layer using mootdx, Tencent Finance,

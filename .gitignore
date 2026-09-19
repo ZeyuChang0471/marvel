@@ -221,3 +221,21 @@ __marimo__/
 # MARVEL runtime artifacts
 .marvel/
 stocks.txt
+
+# Local run artifacts that must never be committed:
+#   - checkpoint DBs land in ~/.marvel/cache/checkpoints/*.db by default, but
+#     MARVEL_CACHE_DIR / MARVEL_RESULTS_DIR can relocate them into the repo
+#   - README/docs steer users towards `results/`-style output directories
+#   - exported reports are PDFs
+#   - .pytest_tmp/ is what a workspace-confined pytest run creates
+*.db
+*.sqlite
+*.sqlite3
+results/
+*.pdf
+.pytest_tmp/
+# Personal/agent scratch that some contributors keep locally
+.claude/
+_ptmp/
+_upstream/
+_shim3/

@@ -23,6 +23,8 @@ from typing import Any, Callable, Optional, TypeVar
 
 from pydantic import BaseModel
 
+from marvel.llm_clients.base_client import normalize_content
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
@@ -70,4 +72,10 @@ def invoke_structured_or_freetext(
             )
 
     response = plain_llm.invoke(prompt)
-    return response.content
+    # Providers that answer with typed content blocks (OpenAI Responses API,
+    # Gemini 3) return ``content`` as a *list* here.  The four provider clients
+    # already normalise this on their own invoke path, but this fallback builds
+    # the string that becomes ``final_trade_decision`` — and ``parse_rating``
+    # calls ``.splitlines()`` on it, so an unnormalised list crashed the run
+    # only after the whole multi-agent pipeline had finished.
+    return normalize_content(response).content

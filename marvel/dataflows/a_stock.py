@@ -25,6 +25,7 @@ import math
 import random
 import re as _re
 import socket
+import threading
 import time
 import uuid
 import urllib.request
@@ -42,15 +43,23 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _get_prefix(code: str) -> str:
-    """6-digit A-stock code -> market prefix for Tencent API.
+    """6-digit A-stock code -> market prefix for Tencent/Sina.
 
     The 92 prefix must be checked before the leading-9 rule: the Beijing Stock
     Exchange started issuing 920xxx codes for new listings in October 2024, and
     a bare ``startswith("9")`` routes them to Shanghai, where the Tencent quote
     endpoint returns an empty payload (issue #85).  Only 900xxx (Shanghai B
     shares) legitimately belongs to ``sh``.
+
+    The leading **4** rule is the same mistake one digit over.  The BSE also
+    issues 43xxxx/40xxxx codes (430047 诺思兰德, 430139 华岭股份 …); without an
+    explicit branch they fell through to ``sz``, and the Tencent endpoint
+    answers with an empty ``v_pv_none_match`` line that the parser skips — so
+    PE/PB/市值/涨跌停 simply went missing with no error anywhere.
     """
     if code.startswith("92"):
+        return "bj"
+    if code.startswith("4"):        # BSE 43xxxx / 40xxxx
         return "bj"
     if code.startswith(("6", "9")):
         return "sh"
@@ -654,6 +663,10 @@ _EM_SESSION.headers.update({"User-Agent": _UA})
 # 两次东财请求最小间隔(秒)；批量多 Agent 场景可设环境变量 EM_MIN_INTERVAL=1.5~2 降速。
 _EM_MIN_INTERVAL = float(os.environ.get("EM_MIN_INTERVAL", "1.0"))
 _em_last_call = [0.0]  # 模块级上次东财请求时间戳
+# 节流必须真的「串行」。原先只做 check-then-act（读时间戳 → sleep → 请求 → 写时间戳），
+# 两个线程会读到同一个陈旧时间戳然后双双放行，EM_MIN_INTERVAL 形同虚设——而
+# README / CLAUDE.md 恰恰承诺了「串行限流」。这把锁覆盖 sleep + 请求整段。
+_EM_LOCK = threading.Lock()
 
 
 def _em_get(url, params=None, headers=None, timeout=15, **kwargs):
@@ -663,15 +676,16 @@ def _em_get(url, params=None, headers=None, timeout=15, **kwargs):
     串行限流：与上次东财请求间隔 < EM_MIN_INTERVAL 时 sleep 补足 + 0.1~0.5s 随机抖动。
     传入的 headers 会覆盖 session 默认 UA（用于保留各端点自己的 Referer/Origin）。
     """
-    wait = _EM_MIN_INTERVAL - (time.time() - _em_last_call[0])
-    if wait > 0:
-        time.sleep(wait + random.uniform(0.1, 0.5))
-    try:
-        return _EM_SESSION.get(
-            url, params=params, headers=headers, timeout=timeout, **kwargs
-        )
-    finally:
-        _em_last_call[0] = time.time()
+    with _EM_LOCK:
+        wait = _EM_MIN_INTERVAL - (time.time() - _em_last_call[0])
+        if wait > 0:
+            time.sleep(wait + random.uniform(0.1, 0.5))
+        try:
+            return _EM_SESSION.get(
+                url, params=params, headers=headers, timeout=timeout, **kwargs
+            )
+        finally:
+            _em_last_call[0] = time.time()
 
 
 def _eastmoney_datacenter(
@@ -997,15 +1011,33 @@ def get_stock_data(
     if supplemented:
         data_source = f"{data_source} + sina HTTP supplement"
 
-    # Filter by date range
-    start_dt = pd.to_datetime(start_date)
-    end_dt = pd.to_datetime(end_date)
+    # Filter by date range.
+    # ``end_date`` comes from the model, so it cannot be trusted: nothing in any
+    # prompt asks for the analysis date, and the natural default (today) pulls
+    # bars that did not exist on a historical analysis date into the report.
+    # Clamp to the market date and say so, in the same spirit as
+    # _snapshot_notice() — every other date-aware tool here clamps or warns.
+    start_dt = pd.to_datetime(start_date, errors="coerce")
+    end_dt = pd.to_datetime(end_date, errors="coerce")
+    clamped_note = ""
+    market_today = _market_today()
+    if pd.isna(start_dt):
+        return f"Invalid start_date for A-stock '{code}': {start_date!r}"
+    if pd.isna(end_dt) or end_dt.date() > market_today:
+        requested_end = end_date
+        end_dt = pd.Timestamp(market_today)
+        end_date = market_today.strftime("%Y-%m-%d")
+        clamped_note = (
+            f"# ⚠️ end_date 已从 {requested_end} 收敛到市场当天 {end_date}："
+            f"分析日之后不存在已知的 K 线，不能把它们当作事实。\n"
+        )
     df = df[(df["Date"] >= start_dt) & (df["Date"] <= end_dt)]
 
     if df.empty:
         return (
             f"No data found for A-stock '{code}' "
             f"between {start_date} and {end_date}"
+            + _no_data_reason(end_date)
         )
 
     for col in ["Open", "High", "Low", "Close"]:
@@ -1018,6 +1050,7 @@ def get_stock_data(
     )
 
     header = f"# Stock data for {code} (A-stock) from {start_date} to {end_date}\n"
+    header += clamped_note
     header += f"# Total records: {len(df)}\n"
     header += f"# Data source: {data_source}\n"
     header += (
@@ -1307,8 +1340,10 @@ def _get_financial_report_sina(
     }
     source_type = _report_type_map.get(report_type, "lrb")
 
-    prefix = "sh" if code.startswith("6") else "sz"
-    paper_code = f"{prefix}{code}"
+    # 用 _sina_stock_code（走 _get_prefix），不要内联 `"sh" if startswith("6") else "sz"`：
+    # 那条内联规则把北交所 8xxxxx/4xxxxx 派到 sz，新浪会返回空——而调用方只看到
+    # "No balance sheet data found"，与真的没有报表完全分不清。
+    paper_code = _sina_stock_code(code)
     url = "https://quotes.sina.cn/cn/api/openapi.php/CompanyFinanceService.getFinanceReport2022"
     params = {
         "paperCode": paper_code,
@@ -1327,15 +1362,31 @@ def _get_financial_report_sina(
 
     df = pd.DataFrame(items)
 
-    # Filter by curr_date
-    if curr_date and "报告日" in df.columns:
-        df["报告日"] = pd.to_datetime(df["报告日"], errors="coerce")
-        cutoff = pd.to_datetime(curr_date)
-        df = df[df["报告日"] <= cutoff]
+    # Point-in-time cutoff.  A report period can *end* before the analysis date
+    # while only being *published* after it, so the column has to be cut or the
+    # model reads quarters that did not exist yet.
+    #
+    # This used to read ``if curr_date and "报告日" in df.columns`` — with the
+    # tools defaulting curr_date to None, the guard silently switched itself off
+    # and every statement returned the newest 8 periods.  A default is as good
+    # as no guard at all, so: fall back to the market date, and refuse a payload
+    # we cannot date rather than returning it unfiltered.
+    if "报告日" not in df.columns:
+        logger.warning(
+            "财务报表明细缺少「报告日」列（%s），无法做时点裁剪，本批数据已丢弃",
+            report_type,
+        )
+        return pd.DataFrame()
+
+    cutoff = pd.to_datetime(curr_date or _market_today(), errors="coerce")
+    if pd.isna(cutoff):
+        return pd.DataFrame()
+    df["报告日"] = pd.to_datetime(df["报告日"], errors="coerce")
+    df = df[df["报告日"] <= cutoff]
 
     # Filter by frequency (annual = month 12 reports only)
-    if freq.lower() == "annual" and "报告日" in df.columns:
-        months = pd.to_datetime(df["报告日"], errors="coerce").dt.month
+    if freq.lower() == "annual":
+        months = df["报告日"].dt.month
         df = df[months == 12]
 
     return df.head(8)
@@ -1346,7 +1397,11 @@ def get_balance_sheet(
     freq: Annotated[str, "frequency: 'annual' or 'quarterly'"] = "quarterly",
     curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None,
 ) -> str:
-    """Get balance sheet via Sina direct HTTP API."""
+    """Get balance sheet via Sina direct HTTP API.
+
+    ``curr_date`` may be omitted by a direct caller; the helper then cuts at the
+    market date rather than skipping the point-in-time filter.
+    """
     code = _normalize_ticker(ticker)
 
     try:
@@ -1377,7 +1432,11 @@ def get_cashflow(
     freq: Annotated[str, "frequency: 'annual' or 'quarterly'"] = "quarterly",
     curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None,
 ) -> str:
-    """Get cash flow statement via Sina direct HTTP API."""
+    """Get cash flow statement via Sina direct HTTP API.
+
+    ``curr_date`` may be omitted by a direct caller; the helper then cuts at the
+    market date rather than skipping the point-in-time filter.
+    """
     code = _normalize_ticker(ticker)
 
     try:
@@ -1408,7 +1467,11 @@ def get_income_statement(
     freq: Annotated[str, "frequency: 'annual' or 'quarterly'"] = "quarterly",
     curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None,
 ) -> str:
-    """Get income statement via Sina direct HTTP API."""
+    """Get income statement via Sina direct HTTP API.
+
+    ``curr_date`` may be omitted by a direct caller; the helper then cuts at the
+    market date rather than skipping the point-in-time filter.
+    """
     code = _normalize_ticker(ticker)
 
     try:
@@ -1523,6 +1586,54 @@ def _fetch_news_sina(code: str, page_size: int = 20) -> list[dict]:
     return articles
 
 
+_NEWS_DATE_RE = _re.compile(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})")
+
+
+def _parse_news_date(value) -> date | None:
+    """Best-effort publication date for one news item, or None if unknown.
+
+    Handles the shapes the two feeds actually send: a unix timestamp (CLS
+    ``ctime``), ``YYYY-MM-DD[ HH:MM[:SS]]`` and ``YYYY/MM/DD``.  Timestamps are
+    converted in the **market** timezone, not the host's, so an article that
+    lands near midnight is filed on the same day the A-share reader would file
+    it.
+
+    Returning None means "cannot be placed in time".  Callers must treat that
+    as *drop it* and never as *in range* — keeping an undated article is exactly
+    how present-day news used to end up inside a historical window.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=_MARKET_TZ).date()
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    # CLS serves ctime as a unix timestamp; the JSON decoder normally gives an
+    # int, but a numeric string must not silently fall through to the date regex
+    # (a 10-digit epoch would otherwise never match, and the item would be
+    # dropped as undated even though its time was perfectly readable).
+    if text.isdigit() and len(text) >= 10:
+        try:
+            return datetime.fromtimestamp(int(text), tz=_MARKET_TZ).date()
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    m = _NEWS_DATE_RE.search(text)
+    if not m:
+        return None
+    try:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+
+
 def get_news(
     ticker: Annotated[str, "A-stock code"],
     start_date: Annotated[str, "Start date yyyy-mm-dd"],
@@ -1555,14 +1666,16 @@ def get_news(
 
     news_str = ""
     count = 0
+    undated = 0
     for art in articles:
-        pub_time = art.get("time", "")
-        try:
-            pub_dt = datetime.strptime(pub_time[:10], "%Y-%m-%d")
-            if pub_dt < start_dt or pub_dt > end_dt:
-                continue
-        except (ValueError, IndexError):
-            pass
+        pub_date = _parse_news_date(art.get("time", ""))
+        if pub_date is None:
+            # 发布时间读不出来就丢弃。"读不出来" 不等于 "在窗口内"——旧代码在这里
+            # `pass` 掉异常后照常收录，于是今天的新闻会被写进历史窗口的报告里。
+            undated += 1
+            continue
+        if pub_date < start_dt.date() or pub_date > end_dt.date():
+            continue
 
         title = art["title"]
         content = art.get("content", "")
@@ -1579,15 +1692,46 @@ def get_news(
         count += 1
 
     if count == 0:
-        return (
+        parts = [
             f"No news found for A-stock '{code}' "
-            f"between {start_date} and {end_date}"
+            f"between {start_date} and {end_date}."
+        ]
+        if undated:
+            parts.append(
+                f"{undated} article(s) were dropped because their publication "
+                "date could not be read."
+            )
+        if _is_historical(end_date):
+            # 这两个端点只提供"最新"文章，"查不到" 与 "当时没有" 是两回事。
+            parts.append(
+                "Note: the East Money / Sina news endpoints only serve the most "
+                "recent articles, so this window cannot be reconstructed "
+                "faithfully — read this as 'the source cannot look back', not "
+                "as 'no news existed on those dates'."
+            )
+        return " ".join(parts)
+
+    # 有内容返回时同样要说清被丢掉了什么——静默丢弃和多报一条一样糟：
+    # 读者无从判断这份列表是不是完整。
+    notes = []
+    if undated:
+        notes.append(
+            f"> ⚠️ {undated} article(s) were dropped because their publication "
+            "date could not be read."
+        )
+    if _is_historical(end_date):
+        notes.append(
+            "> ⚠️ The East Money / Sina news endpoints only serve the most recent "
+            "articles; earlier items inside this window cannot be retrieved, so "
+            "the list below may be incomplete."
         )
 
-    return (
-        f"## {code} (A-stock) News, from {start_date} to {end_date}:\n\n"
-        + news_str
-    )
+    header = f"## {code} (A-stock) News, from {start_date} to {end_date}:\n"
+    blocks = [header]
+    if notes:
+        blocks.append("\n" + "\n".join(notes) + "\n")
+    blocks.append("\n" + news_str)
+    return "".join(blocks)
 
 
 # ---- 8. get_global_news ----
@@ -1598,10 +1742,17 @@ def get_global_news(
     look_back_days: Annotated[int, "Days to look back"] = 7,
     limit: Annotated[int, "Max articles"] = 10,
 ) -> str:
-    """Get China/global financial news via direct HTTP (CLS + Eastmoney)."""
-    start_dt = datetime.strptime(curr_date, "%Y-%m-%d") - relativedelta(
-        days=look_back_days
-    )
+    """Get China/global financial news via direct HTTP (CLS + Eastmoney).
+
+    Point-in-time discipline: both feeds serve only the *current* wire, so a
+    historical ``curr_date`` cannot be reconstructed.  Items are filtered to the
+    requested window, anything whose publication date cannot be read is dropped,
+    and the caller is told which of the two situations produced an empty result
+    ("the source cannot look back" vs "the window really had no wire") instead
+    of being shown today's news under a historical header.
+    """
+    curr_dt = datetime.strptime(curr_date, "%Y-%m-%d")
+    start_dt = curr_dt - relativedelta(days=look_back_days)
     start_date = start_dt.strftime("%Y-%m-%d")
 
     all_news: list[dict] = []
@@ -1617,17 +1768,21 @@ def get_global_news(
             title = item.get("title", "") or item.get("brief", "")
             content = item.get("content", "") or item.get("brief", "")
             ctime = item.get("ctime", "")
-            # ctime is unix timestamp
+            # ctime is a unix timestamp; render it in market time so the display
+            # matches the date the point-in-time filter compares against.
             pub_time = ""
             if ctime:
                 try:
-                    pub_time = datetime.fromtimestamp(int(ctime)).strftime("%Y-%m-%d %H:%M")
+                    pub_time = datetime.fromtimestamp(
+                        int(ctime), tz=_MARKET_TZ
+                    ).strftime("%Y-%m-%d %H:%M")
                 except (ValueError, TypeError, OSError):
                     pub_time = str(ctime)
             all_news.append({
                 "title": title,
                 "content": content,
                 "time": pub_time,
+                "pub_date": _parse_news_date(ctime),
                 "source": "CLS Wire",
             })
     except Exception as e:
@@ -1655,6 +1810,7 @@ def get_global_news(
                 "title": title,
                 "content": summary,
                 "time": pub_time,
+                "pub_date": _parse_news_date(pub_time),
                 "source": "Eastmoney Global",
             })
     except Exception as e:
@@ -1671,8 +1827,56 @@ def get_global_news(
             seen.add(n["title"])
             unique.append(n)
 
+    # --- Point-in-time filter ------------------------------------------------
+    # 这两个源（财联社电报 / 东财 7×24）只提供"此刻最新"的快讯。原实现算出了
+    # start_date 却**只把它打进标题字符串**，正文一条都不裁——于是复盘历史日期时，
+    # 报告会出现今天的新闻，而标题写着 "from {start_date} to {curr_date}"。
+    # 四个分析师（新闻/政策/游资/宏观）都消费这段文本，且从报告里完全看不出来。
+    historical = _is_historical(curr_date)
+    in_window: list[dict] = []
+    out_of_window = 0
+    undated = 0
+    for n in unique:
+        pub_date = n.get("pub_date")
+        if pub_date is None:
+            undated += 1
+            continue
+        if start_dt.date() <= pub_date <= curr_dt.date():
+            in_window.append(n)
+        else:
+            out_of_window += 1
+
+    header = f"## China & Global Market News, from {start_date} to {curr_date}:\n"
+
+    if not in_window:
+        detail = []
+        if out_of_window:
+            detail.append(f"{out_of_window} published outside the window")
+        if undated:
+            detail.append(f"{undated} with an unreadable publication date")
+        why = f" ({'; '.join(detail)} dropped)" if detail else ""
+        if historical:
+            reason = (
+                f"N/A: 该数据源只提供最新快讯，无法回溯 {start_date} ~ {curr_date} "
+                f"的历史窗口{why}。不要把这理解为「那几天没有新闻」。"
+            )
+        else:
+            reason = f"N/A: {start_date} ~ {curr_date} 窗口内没有快讯{why}。"
+        return f"{header}\n{reason}"
+
+    notes = []
+    if historical:
+        # 窗口内确实有条目，但源只返回最新 N 条，历史窗口注定不完整——必须说清楚。
+        notes.append(
+            f"> ⚠️ 数据源只返回**最新**快讯：以上条目已裁到 {start_date} ~ {curr_date}，"
+            f"该窗口内更早的快讯无法取回（另有 {out_of_window} 条超出窗口被丢弃），"
+            f"因此本列表**可能不完整**，不得当作当日的全部资讯。"
+        )
+    if undated:
+        notes.append(f"> ⚠️ {undated} 条快讯发布时间无法识别，已丢弃。")
+
     news_str = ""
-    for n in unique[:limit]:
+    for n in in_window[:limit]:
         news_str += f"### {n['title']} (source: {n['source']})\n"
         if n.get("content"):
             snippet = (
@@ -1683,10 +1887,11 @@ def get_global_news(
             news_str += f"{snippet}\n"
         news_str += "\n"
 
-    return (
-        f"## China & Global Market News, from {start_date} to {curr_date}:\n\n"
-        + news_str
-    )
+    blocks = [header]
+    if notes:
+        blocks.append("\n" + "\n".join(notes) + "\n")
+    blocks.append("\n" + news_str)
+    return "".join(blocks)
 
 
 # ---- 9. get_insider_transactions ----
@@ -1847,7 +2052,9 @@ def get_hot_stocks(
     import requests
 
     if not curr_date or curr_date.strip() == "":
-        curr_date = datetime.now().strftime("%Y-%m-%d")
+        # 用市场日期而不是主机日期：主机在别的时区时会请求到不存在（或还没到）
+        # 的那一天，接口返回空，用户看到的是"当日没有强势股"。
+        curr_date = _market_today().strftime("%Y-%m-%d")
 
     try:
         url = (
@@ -2005,16 +2212,29 @@ def get_northbound_flow(
     sgt_close = 0.0
     got_realtime = False
 
+    historical = _is_historical(curr_date)
+    if historical:
+        # 分钟级北向只有"今天"的。复盘历史日期时它整段都是未来数据，直接不取——
+        # 与 get_fund_flow 的处理保持一致（那边早就这么做了，这里漏了）。
+        lines.append(
+            f"（分析日期 {curr_date} 早于今天，已略去实时分钟北向——"
+            f"那是今天的盘中数据，不是 {curr_date} 当天的。）\n"
+        )
+
     try:
         url_rt = "https://data.hexin.cn/market/hsgtApi/method/dayChart/"
-        r = requests.get(url_rt, headers=hsgt_headers, timeout=10)
-        d = r.json()
+        d = {}
+        if not historical:
+            r = requests.get(url_rt, headers=hsgt_headers, timeout=10)
+            d = r.json()
 
         times = d.get("time", [])
         hgt = d.get("hgt", [])
         sgt = d.get("sgt", [])
 
-        if times:
+        if historical:
+            pass          # 略去原因已在上面写明
+        elif times:
             lines.append("## Realtime (cumulative net buying, 亿元)")
             n = len(times)
             start_idx = max(0, n - 10)
@@ -2024,28 +2244,52 @@ def get_northbound_flow(
                 s = sgt[i] if i < len(sgt) else "N/A"
                 lines.append(f"  {t}: HGT={h} SGT={s}")
 
-            hgt_close = float(hgt[-1]) if hgt else 0
-            sgt_close = float(sgt[-1]) if sgt else 0
-            total = hgt_close + sgt_close
-            lines.append(
-                f"\nClose: HGT(沪股通)={hgt_close:.2f}亿 "
-                f"SGT(深股通)={sgt_close:.2f}亿 "
-                f"Total={total:.2f}亿"
-            )
-            if total > 0:
-                lines.append("Signal: Net northbound INFLOW (bullish)")
-            elif total < 0:
-                lines.append("Signal: Net northbound OUTFLOW (bearish)")
-            got_realtime = True
+            # 长度必须一致才敢把末元素当成"收盘累计净买入"。上游 hgt/sgt 与 time
+            # 的长度并不总是相同（上面的打印段已经防御了这一点，取值段却没有），
+            # 而两条不同口径、不同长度的序列相加会得出方向与量级都失真的"净流入"，
+            # 还会被写进本地缓存、均进 N 日均值——一路污染后续所有判断。
+            if not (len(hgt) == len(sgt) == n):
+                lines.append(
+                    f"\n⚠️ 沪股通/深股通序列长度不一致（time={n}, HGT={len(hgt)}, "
+                    f"SGT={len(sgt)}），本次不输出净流入结论，也不写入本地缓存。"
+                )
+            elif not hgt or not sgt:
+                lines.append("\n⚠️ 北向序列为空，本次不输出净流入结论。")
+            else:
+                try:
+                    hgt_close = float(hgt[-1])
+                    sgt_close = float(sgt[-1])
+                except (TypeError, ValueError) as conv_err:
+                    lines.append(
+                        f"\n⚠️ 北向收盘值无法解析（{conv_err}），"
+                        f"本次不输出净流入结论。"
+                    )
+                else:
+                    total = hgt_close + sgt_close
+                    lines.append(
+                        f"\nClose: HGT(沪股通)={hgt_close:.2f}亿 "
+                        f"SGT(深股通)={sgt_close:.2f}亿 "
+                        f"Total={total:.2f}亿"
+                    )
+                    if total > 0:
+                        lines.append("Signal: Net northbound INFLOW (bullish)")
+                    elif total < 0:
+                        lines.append("Signal: Net northbound OUTFLOW (bearish)")
+                    got_realtime = True
         else:
             lines.append("No realtime data (non-trading hours or holiday)")
 
         if got_realtime:
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            _save_northbound_snapshot(today_str, hgt_close, sgt_close)
+            # 快照键用市场日期：主机在别的时区时不能让一份"今天的"快照落到别的日子。
+            _save_northbound_snapshot(
+                _market_today().strftime("%Y-%m-%d"), hgt_close, sgt_close
+            )
 
         if include_history:
             history = _load_northbound_history(20)
+            # 历史同样要裁到分析日：本地缓存里存的是"跑分析那天"的收盘快照，
+            # 复盘历史日期时不裁就会把分析日之后的收盘值列进趋势里。
+            history = [row for row in history if str(row[0]) <= curr_date]
             if history:
                 lines.append("\n## Historical Daily Close (local cache, 亿元)")
                 lines.append("Date       | HGT(沪股通) | SGT(深股通) | Total")
@@ -2469,13 +2713,19 @@ def get_lockup_expiry(
     try:
         history_data = _eastmoney_datacenter(
             "RPT_LIFT_STAGE",
-            filter_str=f"(SECURITY_CODE=\"{code}\")",
+            # 上界必须加：只按 SECURITY_CODE 过滤时，复盘历史日期会把**分析日之后**
+            # 才发生的解禁批次也算进"历史解禁记录"（同一批还会重复出现在下面的
+            # "未来待解禁"里），等于把未来的筹码事件当成已知事实。
+            filter_str=(
+                f"(SECURITY_CODE=\"{code}\")"
+                f"(FREE_DATE<='{trade_date}')"
+            ),
             page_size=15,
             sort_columns="FREE_DATE",
             sort_types="-1",
         )
         if history_data:
-            lines.append(f"\n## 个股解禁记录 (共 {len(history_data)} 批)")
+            lines.append(f"\n## 截至 {trade_date} 的解禁记录 (共 {len(history_data)} 批)")
             lines.append("解禁时间 | 类型 | 解禁数量 | 占比")
             for row in history_data:
                 lines.append(
@@ -2545,6 +2795,10 @@ def get_industry_comparison(
     """
     code = _normalize_ticker(ticker)
     lines = [f"# 行业横向对比 | {code} | {trade_date}"]
+    # 板块排名来自东财 push2 的**当前**快照，没有历史时点版本。trade_date 原先只
+    # 出现在标题里，正文却是实时数据——复盘时等于把今天的板块涨跌当成分析日的事实。
+    if _is_historical(trade_date):
+        lines.insert(1, _snapshot_notice(trade_date, "行业板块排名"))
 
     # 东财 push2 行业板块排名 (direct HTTP, replaces 同花顺 which has 401)
     try:

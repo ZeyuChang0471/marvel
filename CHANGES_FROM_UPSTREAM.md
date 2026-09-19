@@ -2,6 +2,16 @@
 
 本文件记录本 Fork 相对于 [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents) 上游 commit `7e9e7b8`（2026-05-04）的所有改动。
 
+> ⚠️ **这是一份按周记录的历史日志，部分内容已过时**。阅读时请对照当前代码：
+>
+> - **包名**：文中 `tradingagents/` 是当时的包名，后来整体重命名为 **`marvel/`**；旧路径只代表当时状态。
+> - **角色/阶段数量**：文中「7 个 analyst」「12 阶段」为当时数字；当前是 **9 个 Analyst** 与 **14 个阶段**。
+> - **`test_astock.py`**：已移到 `scripts/probe_astock_e2e.py`——它是会打真实计费调用的手工探针，不是测试。
+> - **akshare**：文中提到的 akshare 依赖已在 v0.2.5 完全移除，全部改为直连 HTTP。
+> - **许可**：本项目已转为混合许可（含 PolyForm Noncommercial 组件），**不可商用**，见 [LICENSING.md](./LICENSING.md)。
+>
+> 逐组件许可与当前架构请以 `LICENSING.md` 和代码为准，不要以本文件的早期周记为准。
+
 ---
 
 ## Week 1 — 数据层 A 股落地

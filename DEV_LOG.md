@@ -1,5 +1,16 @@
 # MARVEL 开发者日志
 
+> ⚠️ **许可状态已变更，本文件早先的记录不再成立**：下面第 10、18、31、40、42 行
+> 写于仓库只有 Apache-2.0 代码的时期。后来从 KylinMountain/TradingAgents-AShare
+> 提取了 4 个 PolyForm-Noncommercial-1.0.0 文件（交易日历、量价分析师、宏观分析师、
+> 辩论议题），**本仓库自此不可商用**。许可问题**一律以 [LICENSING.md](./LICENSING.md) 为准**，
+> 本文件不再复述许可结论。
+
+> ⚠️ **本文件里的「7 个 Analyst」「12 阶段」是当时的数字，现已过时**：当前是
+> **9 个 Analyst**（新增量价分析师、宏观板块分析师）与 **14 个进度阶段**。
+> 按周记录的里程碑不改写（那是当时的事实），但架构描述以代码为准
+> （`marvel/graph/setup.py`、`marvel/graph/trading_graph.py`、`web/progress.py`）。
+
 > 上游：simonlin1212/TradingAgents-Astock（本仓库基于其 v0.2.13）
 
 > 基于 TauricResearch/TradingAgents 的 A 股深度特化 fork
@@ -7,7 +18,7 @@
 > Fork 点:`7e9e7b8` (feat: DeepSeek V4 thinking-mode round-trip via DeepSeekChatOpenAI subclass)
 > Fork 时间:2026-05-04
 > 上游许可:Apache License 2.0
-> 本项目许可:Apache License 2.0(继承上游,完全开源,不做商业闭源)
+> ~~本项目许可:Apache License 2.0(继承上游,完全开源,不做商业闭源)~~ → 已变更为混合许可，见 LICENSING.md
 
 ---
 
@@ -15,7 +26,8 @@
 
 **这不是又一个中文翻译版 fork。**
 
-定位:**A 股市场深度特化的多 Agent 投研框架** — 行业级、轻量、可商用、配套教学。
+定位:**A 股市场深度特化的多 Agent 投研框架** — 行业级、轻量、配套教学。
+（原先写的「可商用」自 2026 年提取 PolyForm 组件后已不成立，见文首说明与 LICENSING.md。）
 
 目标受众:
 - 独立投资研究者
@@ -28,7 +40,7 @@
 | 对比对象 | 我们的差异 |
 |---|---|
 | **TauricResearch 原版** | 加 A 股全栈数据源 + Agent 中文化 + A 股交易制度适配 + A 股特化新角色 |
-| **hsliuping/TradingAgents-CN** | 全 Apache 2.0 开源(对方混合商业闭源)、轻量化部署(无需 MongoDB/Redis)、数据源用 mootdx 不封 IP(对方 Tushare 积分墙)、A 股特化深度更深(政策/游资/解禁) |
+| **hsliuping/TradingAgents-CN** | 轻量化部署(无需 MongoDB/Redis)、数据源用 mootdx 不封 IP(对方 Tushare 积分墙)、A 股特化深度更深(政策/游资/解禁) |
 | **微软 Qlib** | LLM 推理范式,补齐 Qlib 的"语义理解"能力,而非替代其因子工程 |
 
 ---
@@ -37,7 +49,9 @@
 
 ### 决策一:在原版上 fork,不在 CN 版上 fork
 
-**Why**:CN 版的 `app/` (FastAPI) + `frontend/` (Vue) 是商业闭源,我们要做完全 Apache 2.0 开源,基础必须干净。
+**Why**:CN 版的 `app/` (FastAPI) + `frontend/` (Vue) 是商业闭源，基础必须干净。
+（原文此处写「我们要做完全 Apache 2.0 开源」——那是当时的计划；后来引入的
+PolyForm 组件已使本仓库整体转为非商业许可，见 LICENSING.md。）
 
 **How to apply**:从 TauricResearch 原版直接 fork,CN 版作为 `tradingagents/` 部分(Apache 2.0)的"借鉴学习对象",而不是直接合并代码。
 
@@ -360,7 +374,7 @@ TradingAgents 每次分析需 30-50 次 LLM API 调用,必须使用 API Key 模�
 **Pipeline 全链路验证:**
 
 ```
-7 Analysts → Quality Gate → Bull/Bear Debate → Trader → Risk Panel (3方) → PM
+9 Analysts → Quality Gate → Bull/Bear Debate → Trader → Risk Panel (3方) → PM
     ✅           ✅            ✅              ✅         ✅              ✅
 ```
 

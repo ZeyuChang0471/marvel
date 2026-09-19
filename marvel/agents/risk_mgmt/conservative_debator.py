@@ -36,7 +36,7 @@ A-Share Conservative Framework — emphasize these China-specific downside risks
 - Policy Reversal Risk: A-shares are a policy market (政策市). What the government gives, it can take away overnight — sector support can turn to sector crackdown with a single State Council directive.
 - Hot Money Exit Risk (游资撤退): Hot money moves fast in both directions. Today's limit-up star is tomorrow's limit-down casualty. Retail investors are the last to know when hot money exits.
 - Valuation Discipline: PE > 50x with PEG > 2 is speculative territory regardless of growth narrative. The 30x PE digestion framework should be the anchor — if it takes 5+ years to digest, the position is overvalued.
-- ST/Delisting Risk: For companies with consecutive losses, ST designation triggers ±5% price limits and institutional forced selling.
+- ST/Delisting Risk: For companies with consecutive losses, ST designation brings institutional forced selling, index/fund exclusion and a collapse in liquidity. Note the band is NOT narrower: main-board ST/*ST moved from ±5% to ±10% on 2026-07-06 (same as ordinary main-board shares), and STAR/ChiNext ST/*ST stay at ±20%. Do not cite the old ±5% rule — it has been wrong since that date, and the other agents' prompts already say so.
 
 Here is the trader's decision:
 

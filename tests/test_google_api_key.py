@@ -3,11 +3,20 @@ from unittest.mock import patch
 
 import pytest
 
-# google-genai is an optional extra (`pip install -e ".[google]"`). Without it
-# the import below would abort collection for the whole suite, so skip instead.
+# langchain-google-genai is NOT installable alongside the core dependency set:
+# it needs httpx>=0.28.1 while mootdx pins httpx<0.26 (issue #87). There is
+# deliberately no `[google]` extra, so this file stays skipped in the default
+# environment — install it explicitly if you want to exercise it:
+#   pip install --no-deps "langchain-google-genai>=4.0.0"
+#   pip install "google-genai>=1.53.0" "httpx>=0.28.1"
+# Without the skip the import below would abort collection for the whole suite.
 pytest.importorskip(
     "langchain_google_genai",
-    reason="optional dependency — install with: pip install -e '.[google]'",
+    reason=(
+        "optional dependency (conflicts with mootdx's httpx pin; there is no "
+        "'[google]' extra) — see marvel/llm_clients/google_client.py for the "
+        "explicit install commands"
+    ),
 )
 
 from marvel.llm_clients.google_client import GoogleClient  # noqa: E402

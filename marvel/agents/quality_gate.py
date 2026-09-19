@@ -71,7 +71,15 @@ def _hard_check_report(analyst_type: str, report: str) -> tuple:
 def _build_review_prompt(
     reports: dict, trade_date: str, ticker: str
 ) -> str:
-    """Build the LLM review prompt."""
+    """Build the LLM review prompt.
+
+    The analyst count and the mandated output table are derived from
+    ``REPORT_FIELDS`` / ``ANALYST_NAMES`` rather than written out by hand. Both
+    used to be hardcoded to seven while the loop graded nine, so the two newest
+    analysts (量价分析师, 宏观板块分析师) were never reviewed: a missing or
+    fabricated report could not be flagged, and every downstream debater is told
+    to lower its reliance on any report graded C/D/F.
+    """
     report_sections = []
     for analyst_type, field in REPORT_FIELDS.items():
         name = ANALYST_NAMES[analyst_type]
@@ -84,7 +92,19 @@ def _build_review_prompt(
 
     all_reports = "\n\n".join(report_sections)
 
-    return f"""你是数据质量审核员。以下是 7 位分析师对 {ticker} 在 {trade_date} 的研究报告。请逐一审核。
+    # 表格行同样从 ANALYST_NAMES 生成，避免漏掉后加的角色。
+    table_rows = []
+    for index, analyst_type in enumerate(REPORT_FIELDS):
+        name = ANALYST_NAMES[analyst_type]
+        if index == 0:
+            table_rows.append(
+                f"| {name} | A/B/C/D/F | 是否匹配交易日 | 列出缺失的必采项 | 简要说明 |"
+            )
+        else:
+            table_rows.append(f"| {name} | ... | ... | ... | ... |")
+    review_table = "\n".join(table_rows)
+
+    return f"""你是数据质量审核员。以下是 {len(REPORT_FIELDS)} 位分析师对 {ticker} 在 {trade_date} 的研究报告。请逐一审核。
 
 {all_reports}
 
@@ -98,13 +118,7 @@ def _build_review_prompt(
 
 | 分析师 | 评级 | 数据时效 | 缺失项 | 备注 |
 |--------|------|----------|--------|------|
-| 技术分析师 | A/B/C/D/F | 是否匹配交易日 | 列出缺失的必采项 | 简要说明 |
-| 情绪分析师 | ... | ... | ... | ... |
-| 新闻分析师 | ... | ... | ... | ... |
-| 基本面分析师 | ... | ... | ... | ... |
-| 政策分析师 | ... | ... | ... | ... |
-| 游资追踪师 | ... | ... | ... | ... |
-| 解禁监控师 | ... | ... | ... | ... |
+{review_table}
 
 **整体评级**: A/B/C/D/F
 **数据可信度**: 高/中/低

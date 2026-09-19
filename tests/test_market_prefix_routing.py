@@ -4,13 +4,18 @@ Regression cover for issue #85: the Beijing Stock Exchange started issuing
 920xxx codes for new listings in October 2024.  A bare ``startswith("9")``
 routed them to Shanghai, where the Tencent quote endpoint answers with an
 empty payload instead of an error — so the failure was silent.
+
+Same failure mode one digit over: the BSE also issues 43xxxx/40xxxx codes.
+Those fell through to ``sz``, and the Tencent endpoint again answered with an
+empty ``v_pv_none_match`` line that the parser skips — PE/PB/市值/涨跌停 just
+went missing, with no error to trace it back to.
 """
 
 import unittest
 
 import pytest
 
-from marvel.dataflows.a_stock import _get_prefix
+from marvel.dataflows.a_stock import _get_prefix, _sina_stock_code
 
 
 @pytest.mark.unit
@@ -39,6 +44,18 @@ class MarketPrefixRoutingTests(unittest.TestCase):
         """900xxx (Shanghai B shares) is the only leading-9 range that really is Shanghai."""
         self.assertEqual(_get_prefix("900901"), "sh")
         self.assertEqual(_get_prefix("900932"), "sh")
+
+    def test_beijing_4_prefix_routes_to_bj_not_sz(self):
+        """430xxx / 400xxx 也是北交所，不能落到 sz。"""
+        for code in ("430047", "430139", "400001", "400008"):
+            self.assertEqual(_get_prefix(code), "bj", f"{code} must route to bj")
+
+    def test_sina_code_uses_the_shared_prefix_rule(self):
+        """新浪 paperCode 必须走 _get_prefix，不能内联 "6→sh 否则 sz"。"""
+        self.assertEqual(_sina_stock_code("600519"), "sh600519")
+        self.assertEqual(_sina_stock_code("000001"), "sz000001")
+        self.assertEqual(_sina_stock_code("430047"), "bj430047")
+        self.assertEqual(_sina_stock_code("830799"), "bj830799")
 
 
 if __name__ == "__main__":

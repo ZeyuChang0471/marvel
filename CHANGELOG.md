@@ -1,10 +1,127 @@
 # Changelog
 
+> **Attribution note.** This changelog is **inherited from the upstream project**
+> (`simonlin1212/TradingAgents-Astock`), so entries below `[0.2.13]` describe that
+> project. Two consequences when reading it here:
+>
+> - Paths and environment variables in older entries use the pre-rename names
+>   (`tradingagents/…`, `~/.tradingagents/…`, `TRADINGAGENTS_MEMORY_LOG_PATH`);
+>   in MARVEL those are `marvel/…`, `~/.marvel/…` and `MARVEL_MEMORY_LOG_PATH`.
+> - The alpha benchmark note "alpha vs SPY" is upstream's; MARVEL uses CSI 300.
+>
+> MARVEL's own version number tracks upstream's `0.2.13` baseline. See
+> `CHANGES_FROM_UPSTREAM.md` and `NOTICE` for what MARVEL changed.
+
 All notable changes to TradingAgents are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
+
+## [Unreleased] — MARVEL
+
+审查驱动的修复，全部由 `tests/` 里的回归用例守着。三个主题：**决策评级的静默出错**、
+**未来函数防护的漏洞**、**文档/许可证/元数据与代码脱节**。
+
+### Fixed — 决策评级（静默给出错误结论）
+
+- **评级标签改成按权威性排序，同级取最后一次出现**（`rating.py`）。原先「最左命中就
+  返回」，于是一份先复述上游建议、再给出自己裁决的 PM 备忘录
+  （`研究经理的投资建议：增持 … 最终评级：卖出`）会被解析成 **Overweight**。报告正文
+  完全看不出异常，而错误评级会写进记忆日志、再作为「过往教训」注入该股票之后每一次运行。
+  规则：`最终评级 / **Rating** / 评级结论` > `评级 / Rating` > `投资建议 / 建议`。
+- **解析不出评级时不再伪装成 Hold**：新增 `parse_rating_explicit()`（返回 `None`），
+  记忆日志把读不出评级的情况记为 `unparsed` 而不是编造一个「模型选了 Hold」的判断；
+  `parse_rating()` 落回默认值时记 warning。
+- **结构化输出回退路径归一化 `content`**（`structured.py`）。OpenAI Responses / Gemini 3
+  会返回 typed content block（list），未归一化时 `parse_rating` 会在**整条管线跑完之后**
+  因 `.splitlines()` 崩溃。
+- **质量门控 prompt 覆盖全部 9 个分析师**（`quality_gate.py`）。「N 位分析师」与输出表格
+  原先写死成 7，而循环评 9 个——量价与宏观分析师永远不会被打分，但下游每个辩手都被告知
+  「C/D/F 的报告要降低依赖」。
+- 评级正则加词边界，`operating margin: 25%` 不再被当成 `rating` 标签。
+
+### Fixed — 未来函数（历史复盘里混进今天的数字）
+
+- **`get_global_news` 真正按发布时间裁剪**。原先算出了窗口却只把它打进标题字符串，正文
+  一条不裁——复盘历史日期时报告里出现**今天**的新闻，标题却写着
+  `from {start_date} to {curr_date}`。四个分析师消费这段文本。现在：窗口外的条目丢弃、
+  无法确定发布时间的条目丢弃、历史窗口下明确标注「源只提供最新快讯，该窗口可能不完整」，
+  全空时区分「源不能回溯」与「那几天没有新闻」。
+- **三张财报的 `curr_date` 改为必填**，数据层在 `curr_date` 缺失时退到市场当天而不是
+  跳过裁剪。此前 `if curr_date and …` 配上工具默认的 `None`，等于没有设防。
+- **`get_stock_data` 的 `end_date` 收敛到市场当天**并说明原因（`end_date` 由模型给出，
+  没有任何提示词要求它填分析日）。
+- **北向资金**：复盘历史时不再取今天的实时分钟流；`hgt/sgt/time` 长度不一致时拒绝输出
+  净流入结论（原先直接把两条不同口径序列的末元素相加，方向与量级都会失真并落盘）；
+  本地历史缓存裁剪到分析日。
+- **解禁历史记录加上界**：`FREE_DATE <= trade_date`，不再把未来的解禁批次算进「历史解禁」。
+- **行业板块排名**在历史日期下加未来函数告警；`get_hot_stocks` 默认日期改用市场时区而不是
+  宿主时钟，且 `curr_date` 改为必填。
+- **`get_news`** 丢弃发布时间无法解析的文章（原先 `except: pass` 后照常收录），并在有内容
+  返回时也说明丢了多少条、以及历史窗口可能不完整。
+
+### Fixed — 数据正确性
+
+- **北交所 `4xxxxx` 代码路由**（`_get_prefix`）：430047/400xxx 原先落到 `sz`，腾讯返回空的
+  `v_pv_none_match` 行被解析器跳过——PE/PB/市值/涨跌停静默消失。新浪财报/新闻/K线共享的
+  前缀规则也统一走 `_get_prefix`（此前内联的 `"6"→sh 否则 sz` 把北交所派到 sz）。
+- **反思/学习回路真正能落地**：`_fetch_returns` 把**裸 6 位代码**传给 yfinance，而基准那
+  一条腿用的是正确后缀（`000300.SS`）——`yf.Ticker("600519")` 匹配不到任何东西，于是每条
+  待复盘记录都「等下次再试」，记忆日志只进不出，反思功能从未产出过一条结果。新增
+  `yahoo_symbol_for_a_stock()`（复用 `_get_prefix`，含北交所），并让空结果留下日志而不是
+  被当成「价格还没出现」静默吞掉。
+- **`_em_get` 节流真正串行**：原先读时间戳→sleep→请求→写时间戳是无锁的 check-then-act，
+  两个线程会同时放行——而 README/CLAUDE.md 承诺的正是「串行限流」。
+- **删除 `llm_clients/factory.py` 的 `claude_agent_sdk` 分支**：它 import 一个不存在的
+  模块，把「不支持的 provider」报成 `ModuleNotFoundError`。补上工厂测试。
+
+### Fixed — 文档 / 许可证 / 元数据与代码脱节
+
+- **`pyproject.toml` 使用 SPDX 表达式并登记许可证文件**（PEP 639）：
+  `license = "Apache-2.0 AND PolyForm-Noncommercial-1.0.0"` +
+  `license-files`（LICENSE / LICENSE-TradingAgents-AShare.txt / NOTICE / LICENSING.md），
+  `build-system` 提升到 `setuptools>=77`。此前的自由文本字段无法被工具解析，且与
+  `LICENSING.md` 自己写明的「非商业约束只对第 3、4 项有效」相矛盾。
+- **依赖表按实际 import 重写**：补上被直接 import 却未声明的 `pydantic`、`python-dateutil`；
+  删掉 7 个从未 import 的运行时依赖（`backtrader`、`langchain-experimental`、`parsel`、
+  `pytz`、`redis`、`setuptools`、`tqdm`）。
+- **不再声明 `[google]` extra**：它与 mootdx 的 `httpx<0.26` 无法共存，是装不上的死元数据；
+  `google_client.py` 的 ImportError 早已给出正确的显式安装命令，文档现在与它一致。
+- **许可证声明统一**：`CLAUDE.md` 的「协议: Apache 2.0」与 `DEV_LOG.md` 的「可商用」与
+  README/LICENSING 冲突，已全部改为指向 `LICENSING.md` 的混合许可表述。
+- **`NOTICE` 的 Required Notice 补齐 4 个 PolyForm 文件**（此前只列 1 个，而
+  `LICENSING.md` 与 `LICENSE-TradingAgents-AShare.txt` 列 4 个）；补上 Apache-2.0 §4(b)
+  要求的修改声明。
+- **删除含可执行价位的示例产物**：`examples/cases/002594*`、`300750*` 含建仓价/止损位/
+  仓位/两个目标价，与 LICENSING.md「该能力被完整移除」的声明直接冲突（`_summary.json`
+  里的 `decision_preview` 尤其严重）。`examples/run_cases.py` 现在落盘前强制脱敏。
+- **README/CLAUDE.md 的 7→9 个分析师、12→14 个阶段、默认模型、百度数据源描述、
+  `streamlit run web/launch.py`、项目结构树**全部对齐代码；`web/components/sidebar.py`
+  里对用户显示的「7 个 Analyst」也一并修正。
+- **README 删除「支持上游原作者」捐赠段**（微信赞赏码 + 爱发电 / Buy Me a Coffee），
+  并把写死的「65K Stars」换成 shields.io 实时徽章——实测该数字已 **107,495**，写死必然
+  过期。上游**归属**不受影响，仍保留在 README「致谢与代码血缘」、`NOTICE` 与
+  `LICENSING.md`（Apache-2.0 §4 要求随分发保留）。
+- **`CHANGELOG.md` 标注为继承自上游**并说明旧路径/环境变量；`CHANGES_FROM_UPSTREAM.md`
+  与 `DEV_LOG.md` 加上「计数与包名已过时」的说明；`issues/` 标注为上游归档。
+- **根目录不再有 import 即执行的脚本**：`test_astock.py` / `test_data_quality.py` /
+  `test.py` 移为 `scripts/probe_*.py`（加 `__main__` 守卫），`main.py`（上游美股 demo，
+  模块层跑一次 NVDA 分析）删除，`run.py` / `run_single.py` 的全部模块层副作用
+  （重配 stdio、`set_config`、`sys.exit`、打印 key 片段）移入 `main()`。
+- **`conftest.py` 真正隔离**：key 占位符不再保留开发者本机的真实 key；新增出站连接守卫，
+  让「测试套件离线」这句声明变成强制事实。
+- **CI**：加 `pip check`（能暴露不可解析的 extra）、Python 3.13 一条腿、以及根目录
+  `test_*.py` 残留检查。
+- **`web/history.py` 读取配置里的结果目录**（原先硬编码 `~/.marvel/logs`，设了
+  `MARVEL_RESULTS_DIR` 的部署侧边栏历史永远空）。
+- **`_log_state` 对 `trade_date` 做路径组件校验**（ticker 早就有，date 没有）。
+
+### Tests
+
+- 371 → 488 个通过用例。新增 `test_docs_consistency.py`（20+ 条把文档与代码钉在一起的
+  检查，含「导入即执行」的 AST 扫描）、`test_example_artifacts.py`、`test_llm_factory.py`、
+  `test_em_throttle.py`、`test_return_resolution.py`，以及 look-ahead / rating 的回归矩阵。
 
 ## [0.2.13] — 2026-06-04
 

@@ -29,15 +29,20 @@ def get_profit_forecast(
 
 @tool
 def get_hot_stocks(
-    curr_date: Annotated[str, "Date in YYYY-MM-DD format, empty for today"] = "",
+    curr_date: Annotated[str, "Analysis date in YYYY-MM-DD format (required)"],
 ) -> str:
     """
-    Retrieve today's strong stocks with topic attribution reason tags.
+    Retrieve strong stocks with topic attribution reason tags.
     Shows WHY stocks surged (e.g. '算力租赁+AI政务'), curated by 同花顺 editorial team.
     Includes theme frequency analysis.
     Uses the configured signal_data vendor.
+
+    ⚠️ curr_date 是**必填**：同花顺强势股接口按日期取数，省略就等于取"今天"。
+    复盘历史日期时那会把**今天**的强势股与题材当成分析日当天的事实写进报告，
+    而报告里完全看不出来（未来函数）。同 get_profit_forecast。
+
     Args:
-        curr_date (str): Date in YYYY-MM-DD format, empty string for today
+        curr_date (str): Analysis date in YYYY-MM-DD format (required)
     Returns:
         str: Hot stocks list with reason tags and theme frequency
     """

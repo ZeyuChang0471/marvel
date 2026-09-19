@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+# PEP 639 (SPDX license expressions + `license-files`) needs setuptools>=77.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,29 +9,56 @@ version = "0.2.13"
 description = "MARVEL — Multi-Agent Research & Valuation Engine for Long-short（A股多Agent投研框架）"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "Mixed: Apache-2.0 + PolyForm-Noncommercial-1.0.0 (non-commercial use only) — see LICENSING.md"}
+# SPDX expression, not free text (PEP 639). `AND` = both sets of terms apply to
+# the distribution, which is what LICENSING.md says: the code inherited through
+# the fork chain stays Apache-2.0 (and every recipient keeps Apache's
+# irrevocable, commercially-usable grant), while the files taken from
+# KylinMountain/TradingAgents-AShare are PolyForm-Noncommercial-1.0.0. Because a
+# PolyForm component is present, the distribution as a whole is non-commercial.
+# The per-component breakdown lives in LICENSING.md and NOTICE — a machine
+# readable field cannot express it, so it must not pretend to.
+license = "Apache-2.0 AND PolyForm-Noncommercial-1.0.0"
+license-files = [
+    "LICENSE",
+    "LICENSE-TradingAgents-AShare.txt",
+    "NOTICE",
+    "LICENSING.md",
+]
 authors = [
     {name = "ZeyuChang0471", email = "ZeyuChang0471@users.noreply.github.com"},
 ]
+keywords = ["a-share", "stock", "multi-agent", "llm", "research", "valuation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# Listed from an audit of what the code actually imports. Do not add a
+# dependency here without an import to back it — and do not rely on a
+# transitive pin to supply one (pydantic and python-dateutil were both being
+# imported without being declared).
 dependencies = [
     "langchain-core>=0.3.81",
-    "backtrader>=1.9.78.123",
     "langchain-anthropic>=0.3.15",
-    "langchain-experimental>=0.3.4",
     "langchain-openai>=0.3.23",
     "langgraph>=0.4.8",
     "langgraph-checkpoint-sqlite>=2.0.0",
     "pandas>=2.3.0",
-    "parsel>=1.10.0",
-    "pytz>=2025.2",
+    "pydantic>=2.7",
+    "python-dateutil>=2.9",
     "questionary>=2.1.0",
-    "redis>=6.2.0",
     "requests>=2.32.4",
     "rich>=14.0.0",
     "typer>=0.21.0",
-    "setuptools>=80.9.0",
     "stockstats>=0.6.5",
-    "tqdm>=4.67.1",
     "typing-extensions>=4.14.0",
     "yfinance>=0.2.63",
     "streamlit>=1.45.0",
@@ -47,7 +75,20 @@ Upstream = "https://github.com/TauricResearch/TradingAgents"
 Upstream-Astock = "https://github.com/simonlin1212/tradingagents-astock"
 
 [project.optional-dependencies]
-google = ["langchain-google-genai>=4.0.0"]
+# NOTE: there is deliberately no `google` extra.
+#
+# langchain-google-genai needs `httpx>=0.28.1` while mootdx pins
+# `httpx>=0.25,<0.26` (mootdx 0.11.7 METADATA), so an extra declaring it would
+# be unsatisfiable next to the core dependency set — pip could not resolve it,
+# and CI never installed it, so it silently rotted. `marvel/llm_clients/
+# google_client.py` raises an ImportError explaining the conflict and giving the
+# working install commands instead:
+#
+#   pip install --no-deps "langchain-google-genai>=4.0.0"
+#   pip install "google-genai>=1.53.0" "httpx>=0.28.1"
+#
+# (mootdx speaks TDX over TCP and does not import httpx at runtime, so bumping
+# httpx is safe in practice.) Reinstating an extra requires resolving that pin.
 dev = [
     "pytest>=8.0",
 ]

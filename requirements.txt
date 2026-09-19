@@ -1,1 +1,11 @@
-.
+# MARVEL is packaged with pyproject.toml — install it as a distribution:
+#
+#     pip install -e .            # runtime only
+#     pip install -e ".[dev]"     # + pytest, for the test suite
+#
+# Note that pip resolves the `.` below against the *current working directory*,
+# so `pip install -r requirements.txt` only works from the repository root.
+#
+# Deliberately just the local project: there is no second, hand-maintained
+# dependency list here to drift out of sync with pyproject.toml.
+-e .

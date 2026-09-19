@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 from pathlib import Path
 import json
 from datetime import datetime, timedelta
@@ -19,6 +20,7 @@ from marvel.agents import *
 from marvel.default_config import DEFAULT_CONFIG
 from marvel.agents.utils.memory import TradingMemoryLog
 from marvel.dataflows.utils import safe_ticker_component
+from marvel.dataflows.a_stock import _get_prefix
 from marvel.agents.utils.agent_states import (
     AgentState,
     InvestDebateState,
@@ -53,6 +55,35 @@ from .setup import GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
 from .signal_processing import SignalProcessor
+
+
+#: Yahoo Finance exchange suffix per MARVEL market prefix.
+_YAHOO_SUFFIX = {"sh": "SS", "sz": "SZ", "bj": "BJ"}
+
+
+def yahoo_symbol_for_a_stock(ticker: str) -> str:
+    """Map a 6-digit A-share code to its Yahoo Finance symbol.
+
+    `_fetch_returns` used to pass the **bare** code to yfinance while the
+    benchmark leg correctly used "000300.SS". `yf.Ticker("600519")` matches
+    nothing, so the function returned ``(None, None, None)`` for every entry —
+    silently, because an empty frame is not an exception. The deferred
+    reflection loop therefore never resolved a single outcome: the memory log
+    accumulated pending entries forever and the "learn from past mistakes"
+    feature did nothing at all.
+
+    Routing reuses `_get_prefix` so the Yahoo symbol can never disagree with the
+    market the data layer actually queries (including the Beijing Stock
+    Exchange's 92xxxx / 43xxxx / 40xxxx ranges).
+
+    Anything that is not a bare 6-digit code — an already-suffixed symbol, a US
+    ticker, an index — is returned unchanged, so the yfinance vendor path keeps
+    working.
+    """
+    code = str(ticker).strip()
+    if not re.fullmatch(r"\d{6}", code):
+        return ticker
+    return f"{code}.{_YAHOO_SUFFIX[_get_prefix(code)]}"
 
 
 class MarvelGraph:
@@ -264,10 +295,25 @@ class MarvelGraph:
             end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
             end_str = end.strftime("%Y-%m-%d")
 
-            stock = yf.Ticker(ticker).history(start=trade_date, end=end_str)
+            stock = yf.Ticker(yahoo_symbol_for_a_stock(ticker)).history(
+                start=trade_date, end=end_str
+            )
             benchmark = yf.Ticker("000300.SS").history(start=trade_date, end=end_str)
 
             if len(stock) < 2 or len(benchmark) < 2:
+                # 空结果不是异常：Yahoo 不认这个 symbol 时只返回空表。原先裸传 6 位
+                # 代码就落在这里，于是每一条待复盘记录都「等下次再试」，永远不落地。
+                # 只有价格真的还没出现（分析日太近）才该静默跳过；symbol 解析错误
+                # 必须留下痕迹，否则这个功能会一直静默失效。
+                logger.warning(
+                    "No usable price series for %s (%s) on %s: "
+                    "stock=%d rows, benchmark=%d rows — pending outcome not resolved",
+                    ticker,
+                    yahoo_symbol_for_a_stock(ticker),
+                    trade_date,
+                    len(stock),
+                    len(benchmark),
+                )
                 return None, None, None
 
             actual_days = min(holding_days, len(stock) - 1, len(benchmark) - 1)
@@ -448,8 +494,16 @@ class MarvelGraph:
             self.close_graph_run()
 
     def _log_state(self, trade_date, final_state):
-        """Log the final state to a JSON file."""
-        self.log_states_dict[str(trade_date)] = {
+        """Log the final state to a JSON file.
+
+        ``trade_date`` becomes part of a filename, so it goes through the same
+        path-component validation as the ticker. The CLI validates its own input
+        with ``strptime``, but this is a public method and a library caller can
+        pass anything — ``safe_ticker_component`` rejects ``/``, ``\\``,
+        dot-only and over-long values, so one boundary covers both.
+        """
+        safe_trade_date = safe_ticker_component(str(trade_date))
+        self.log_states_dict[safe_trade_date] = {
             "company_of_interest": final_state["company_of_interest"],
             "trade_date": final_state["trade_date"],
             "market_report": final_state["market_report"],
@@ -496,9 +550,9 @@ class MarvelGraph:
         directory = Path(self.config["results_dir"]) / safe_ticker / "marvel_strategy_logs"
         directory.mkdir(parents=True, exist_ok=True)
 
-        log_path = directory / f"full_states_log_{trade_date}.json"
+        log_path = directory / f"full_states_log_{safe_trade_date}.json"
         with open(log_path, "w", encoding="utf-8") as f:
-            json.dump(self.log_states_dict[str(trade_date)], f, indent=4)
+            json.dump(self.log_states_dict[safe_trade_date], f, indent=4)
 
     def process_signal(self, full_signal):
         """Process a signal to extract the core decision."""

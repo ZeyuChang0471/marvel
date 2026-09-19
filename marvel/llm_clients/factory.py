@@ -47,9 +47,13 @@ def create_llm_client(
         from .anthropic_client import AnthropicClient
         return AnthropicClient(model, base_url, **kwargs)
 
-    if provider_lower == "claude_agent_sdk":
-        from .claude_agent_sdk_client import ClaudeAgentSDKClient
-        return ClaudeAgentSDKClient(model, base_url, **kwargs)
+    # NOTE: there used to be a `claude_agent_sdk` branch here that imported
+    # `marvel.llm_clients.claude_agent_sdk_client` — a module that does not
+    # exist. Passing that provider therefore raised `ModuleNotFoundError`
+    # instead of the `ValueError` below, and nothing caught it because the
+    # factory had no test. Removed rather than left as a dead-but-crashing path;
+    # reinstate it together with the module and a test in
+    # tests/test_docs_consistency.py::TestLlmFactory.
 
     if provider_lower == "google":
         from .google_client import GoogleClient

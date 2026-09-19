@@ -15,12 +15,28 @@ the final decision arrives as Chinese prose with **no** English ``Rating:``
 header — just a line like ``最终评级：卖出``. The parser therefore also
 recognises the Chinese 5-tier vocabulary; without it, every such run silently
 defaulted to Hold regardless of the model's actual call (issues #78 / #80).
+
+Label authority: one document routinely carries several rating labels at once.
+A PM memo restates the Research Manager's advice before delivering its own
+verdict (``研究经理的投资建议：增持 … 最终评级：卖出``).  Taking the *first*
+label therefore let a quoted, less conclusive label overwrite the real
+decision, and nothing in the rendered report shows it happened.  The parser
+ranks labels by how conclusive they are and, within one rank, takes the
+**last** occurrence, because the verdict follows the discussion it summarises.
+
+Absence of a rating is reported honestly: :func:`parse_rating_explicit`
+returns ``None`` instead of inventing a value, so callers that must not paper
+over a parse failure (the memory log) can tell "the model said Hold" apart
+from "we could not read the model's answer".
 """
 
 from __future__ import annotations
 
+import logging
 import re
-from typing import Tuple
+from typing import Iterator, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 # Canonical, ordered 5-tier scale (most bullish to most bearish).
@@ -32,7 +48,9 @@ _RATING_SET = {r.lower() for r in RATINGS_5_TIER}
 
 # Matches "Rating: X" / "rating - X" / "Rating: **X**" — tolerates markdown
 # bold wrappers and either a colon or hyphen separator.
-_RATING_LABEL_RE = re.compile(r"rating.*?[:\-][\s*]*(\w+)", re.IGNORECASE)
+# The leading ``\b`` stops the label from being found *inside* another word:
+# without it "operating: 5" matches ``rating`` from the middle of "operating".
+_RATING_LABEL_RE = re.compile(r"\brating.*?[:\-][\s*]*(\w+)", re.IGNORECASE)
 
 # Chinese 5-tier vocabulary → canonical English rating.
 _CN_RATING_MAP = {
@@ -46,16 +64,34 @@ _CN_RATING_MAP = {
 # same position (regex alternation is leftmost, first-listed among equals).
 _CN_ALT = "|".join(sorted(_CN_RATING_MAP, key=len, reverse=True))
 
+# ---------------------------------------------------------------------------
+# Label authority ranks
+# ---------------------------------------------------------------------------
+# 0 = a verdict, 1 = a plain rating label, 2 = advice.
+# ``**Rating**:`` is the exact header render_pm_decision() emits, so the bold
+# machine-generated form counts as a verdict; a bare ``Rating:`` does not.
+_RANK_VERDICT = 0
+_RANK_RATING = 1
+_RANK_ADVICE = 2
+
+# Named groups here double as the rank discriminator (see _label_rank).
+# Alternatives are ordered longest-first within each rank so that
+# "最终投资建议" is read as a verdict rather than as the advice label "投资建议".
+_CN_LABEL_ALTERNATION = (
+    r"(?P<verdict>最终评级|最终投资评级|最终投资建议|评级结论)"
+    r"|(?P<rating>投资评级|推荐评级|评级)"
+    r"|(?P<advice>投资建议|操作建议|建议|推荐)"
+)
+
 _CN_LABEL_PREFIX = (
-    r"(?:最终评级|评级|投资评级|评级结论|最终投资建议|投资建议|操作建议|"
-    r"推荐评级|建议|推荐)\s*[:：\-]\s*\*{0,2}\s*"
+    r"(?:" + _CN_LABEL_ALTERNATION + r")\s*[:：\-]\s*\*{0,2}\s*"
 )
 
 # A labelled Chinese rating, e.g. "最终评级：卖出" / "投资建议: **增持**".
-_CN_LABEL_RE = re.compile(_CN_LABEL_PREFIX + r"(" + _CN_ALT + r")")
+_CN_LABEL_RE = re.compile(_CN_LABEL_PREFIX + r"(?P<value>" + _CN_ALT + r")")
 
 # 中文标签后面跟**英文**评级词，例如 "最终评级：Buy"。output_language 设为中文、
-# 但模型保留了英文评级词时就是这个形状——而它躲过了上面每一条规则：
+# 但模型保留了英文评级词时就是这个形状——而它躲过了下面每一条规则：
 # 英文标签规则要求出现 "rating"；中文标签规则只认中文评级词；裸英文词扫描按
 # 空白切分，"最终评级：Buy" 是**一个** token，`strip("*:.,")` 又剥不掉全角冒号。
 # 结果是静默落到默认值 Hold —— 决策评级被悄悄改写，报告里完全看不出来。
@@ -79,51 +115,117 @@ _WORD_CONTINUATION = r"(?:[A-Za-z0-9_]|-(?=[A-Za-z0-9_]))"
 _RATING_VALUE_END = r"(?!\*{0,2}" + _WORD_CONTINUATION + r")"
 
 _CN_LABEL_EN_RE = re.compile(
-    _CN_LABEL_PREFIX + r"(" + "|".join(RATINGS_5_TIER) + r")" + _RATING_VALUE_END,
+    _CN_LABEL_PREFIX
+    + r"(?P<value>"
+    + "|".join(RATINGS_5_TIER)
+    + r")"
+    + _RATING_VALUE_END,
     re.IGNORECASE,
 )
 # Bare Chinese rating term anywhere (last-resort fallback).
 _CN_TERM_RE = re.compile(_CN_ALT)
 
 
-def parse_rating(text: str, default: str = "Hold") -> str:
-    """Heuristically extract a 5-tier rating from English or Chinese prose.
+def _label_rank(match: "re.Match[str]") -> int:
+    """Rank a Chinese-label match by how conclusive its label is."""
+    if match.group("verdict") is not None:
+        return _RANK_VERDICT
+    if match.group("rating") is not None:
+        return _RANK_RATING
+    return _RANK_ADVICE
+
+
+def _iter_english_labels(text: str) -> Iterator[Tuple[int, int, str]]:
+    """Yield ``(position, rank, rating)`` for every English ``Rating: X`` label.
+
+    Scanned line by line so a label and its value must sit on the same line;
+    ``position`` is the offset into ``text`` so English and Chinese labels can
+    be ranked against each other in one pass.
+    """
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        for m in _RATING_LABEL_RE.finditer(line):
+            word = m.group(1)
+            if word.lower() not in _RATING_SET:
+                continue
+            # ``**Rating**:`` is the header render_pm_decision() writes.
+            bold = line[max(0, m.start() - 2):m.start()] == "**"
+            rank = _RANK_VERDICT if bold else _RANK_RATING
+            yield offset + m.start(), rank, word.capitalize()
+        offset += len(line)
+
+
+def _iter_labelled_ratings(text: str) -> Iterator[Tuple[int, int, str]]:
+    """Yield ``(position, rank, rating)`` for every *labelled* rating in ``text``."""
+    yield from _iter_english_labels(text)
+
+    for m in _CN_LABEL_RE.finditer(text):
+        yield m.start(), _label_rank(m), _CN_RATING_MAP[m.group("value")]
+
+    # Chinese label + English rating word (最终评级：Buy)
+    for m in _CN_LABEL_EN_RE.finditer(text):
+        yield m.start(), _label_rank(m), m.group("value").capitalize()
+
+
+def parse_rating_explicit(text: str) -> Optional[str]:
+    """Return the canonical rating ``text`` actually states, or ``None``.
+
+    Unlike :func:`parse_rating` this never substitutes a default, so a caller
+    that must distinguish "the model chose Hold" from "the rating could not be
+    read" (the memory log) is able to.
 
     Pass order (first hit wins; explicit labels always beat bare words):
-    1. English ``Rating: X`` label (tolerant of markdown bold).
-    2. Chinese rating label, e.g. ``最终评级：卖出`` / ``投资建议: 增持``；
-       也接受中文标签后跟英文评级词的混排（``最终评级：Buy``）。
-    3. First bare English 5-tier word found anywhere.
-    4. First bare Chinese rating term found anywhere (longest match wins).
-
-    Returns a Title-cased canonical rating, or ``default`` if none appears.
+    1. Labelled ratings — most conclusive label first (verdict > rating >
+       advice); within one rank the **last** occurrence wins.
+    2. First bare English 5-tier word found anywhere.
+    3. First bare Chinese rating term found anywhere (longest match wins).
     """
-    # 1. English explicit label
-    for line in text.splitlines():
-        m = _RATING_LABEL_RE.search(line)
-        if m and m.group(1).lower() in _RATING_SET:
-            return m.group(1).capitalize()
+    if not text:
+        return None
 
-    # 2. Chinese explicit label (最终评级：卖出 …)
-    m = _CN_LABEL_RE.search(text)
-    if m:
-        return _CN_RATING_MAP[m.group(1)]
+    labelled = list(_iter_labelled_ratings(text))
+    if labelled:
+        best_rank = min(rank for _, rank, _ in labelled)
+        # max() over (position, rating) picks the last occurrence in that rank.
+        return max(
+            (position, rating)
+            for position, rank, rating in labelled
+            if rank == best_rank
+        )[1]
 
-    # 2b. Chinese label + English rating word (最终评级：Buy)
-    m = _CN_LABEL_EN_RE.search(text)
-    if m:
-        return m.group(1).capitalize()
-
-    # 3. Bare English rating word
+    # Bare English 5-tier word.
     for line in text.splitlines():
         for word in line.lower().split():
             clean = word.strip("*:.,")
             if clean in _RATING_SET:
                 return clean.capitalize()
 
-    # 4. Bare Chinese rating term (last resort; leftmost, longest at that spot)
+    # Bare Chinese rating term (last resort; leftmost, longest at that spot)
     m = _CN_TERM_RE.search(text)
     if m:
         return _CN_RATING_MAP[m.group(0)]
 
+    return None
+
+
+def parse_rating(text: str, default: str = "Hold") -> str:
+    """Heuristically extract a 5-tier rating from English or Chinese prose.
+
+    Returns a Title-cased canonical rating, or ``default`` when ``text``
+    carries no recognisable rating.  Falling back to a default is logged:
+    returning "Hold" quietly made a parse failure indistinguishable from a
+    genuine Hold call, and the fabricated rating was then written into the
+    memory log and re-injected as a prior lesson on later runs.
+    """
+    rating = parse_rating_explicit(text)
+    if rating is not None:
+        return rating
+
+    if default:
+        logger.warning(
+            "未能在文本中解析出评级，落回默认值 %r。若这段文本其实表达了方向性"
+            "观点，说明它的标签形态没有被 rating.py 覆盖——请检查输出语言与标签"
+            "写法，不要把这个默认值当作模型的真实判断。",
+            default,
+        )
     return default
