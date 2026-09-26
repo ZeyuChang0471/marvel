@@ -19,6 +19,7 @@ Two guarantees the suite relies on, and which nothing used to enforce:
 
 import ipaddress
 import socket
+import sys
 
 import pytest
 
@@ -26,6 +27,34 @@ import pytest
 def pytest_configure(config):
     for marker in ("unit", "integration", "smoke"):
         config.addinivalue_line("markers", f"{marker}: {marker}-level tests")
+
+
+def pytest_runtest_logreport(report):
+    """Emit a GitHub Actions annotation for each failure.
+
+    A red build used to be opaque from the outside: downloading a job log needs
+    repository admin rights, so all anyone could see was "Process completed with
+    exit code 1". ``::error file=…,line=…::message`` lines are rendered by the
+    runner as **annotations**, and annotations are readable with the public
+    checks API — which is the difference between "CI is red" and "this test
+    failed, on this line, for this reason".
+
+    Written to ``sys.__stdout__`` on purpose: pytest captures stdout, and a
+    captured annotation line never reaches the runner.
+    """
+    if report.when != "call" or not report.failed:
+        return
+
+    path, lineno, _ = report.location
+    path = str(path).replace("\\", "/")
+    lines = [line for line in (report.longreprtext or "").splitlines() if line.strip()]
+    detail = lines[-1].strip().replace("`", "'")[:350] if lines else "failed"
+    stream = sys.__stdout__ or sys.stdout
+    print(
+        f"::error file={path},line={lineno + 1}::{report.nodeid} — {detail}",
+        file=stream,
+        flush=True,
+    )
 
 
 _API_KEY_ENV_VARS = (
