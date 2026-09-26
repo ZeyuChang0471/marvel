@@ -550,9 +550,14 @@ pyproject.toml:
 
 ### 开放问题(待决策)
 
-- [ ] 项目要不要加 Web UI?(原版无,CN 版有但商业闭源)— 倾向**先不加**,保持轻量
-- [ ] 要不要做 Docker 镜像?— 倾向加,降低部署门槛
-- [ ] 要不要 GitHub Actions CI?— 倾向先放着,发布时再加
+> 下列讨论发生在 2026-05-12，其中几项后来已经落地，保留当时的措辞并标注结论。
+
+- [x] 项目要不要加 Web UI?(原版无,CN 版有但商业闭源)— 倾向**先不加**,保持轻量
+      → **已加**：`web/`（Streamlit），见 CHANGELOG 的 Web UI 条目
+- [x] 要不要做 Docker 镜像?— 倾向加,降低部署门槛
+      → **已加**：`Dockerfile` + `docker-compose.yml`（含 `marvel-web` 与 ollama profile）
+- [x] 要不要 GitHub Actions CI?— 倾向先放着,发布时再加
+      → **已加**：`.github/workflows/`，Python 3.10–3.13 + `pip check`
 - [ ] 中文 README 之外要不要英文 README?— 国际化考虑可以加,优先级低
 
 ---

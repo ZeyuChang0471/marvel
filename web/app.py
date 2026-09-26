@@ -276,6 +276,10 @@ elif tracker and tracker.error:
 
 # State 0: Idle — welcome screen
 else:
+    # A stopped run clears the tracker (mark_stopped), so without this the user
+    # would just see the welcome screen again and wonder where the report went.
+    if st.session_state.pop("analysis_stopped", None):
+        st.info("上一次分析已被你停止，未完成的产物已清理。")
     st.markdown(
         """
         <div style="

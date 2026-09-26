@@ -159,12 +159,15 @@ class TestStateKeyContract:
         present = set(tracker.final_state)
 
         root = Path(__file__).resolve().parent.parent
+        # The `(?<!\w)` matters: without it the bare `state` alternative also
+        # matches the tail of `st.session_state[...]`, so session-state keys were
+        # reported as graph-state keys read but never produced.
         pattern = re.compile(
-            r'(?:final_state|state|chunk|last_chunk)\s*'
+            r'(?<!\w)(?:final_state|state|chunk|last_chunk)\s*'
             r'(?:\.get\(\s*"([a-z_]+)"|\[\s*"([a-z_]+)"\s*\])'
         )
-        # Keys that live inside nested sub-state dicts, or belong to
-        # session_state rather than graph state.
+        # Keys that live inside nested sub-state dicts rather than the top-level
+        # graph state handed to `_run`.
         nested_or_session = {
             "bull_history", "bear_history", "current_response", "count", "history",
             "judge_decision", "latest_speaker", "aggressive_history",

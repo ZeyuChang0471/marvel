@@ -20,8 +20,8 @@ Breaking changes within the 0.x line are called out explicitly.
 
 ## [Unreleased] — MARVEL
 
-审查驱动的修复，全部由 `tests/` 里的回归用例守着。三个主题：**决策评级的静默出错**、
-**未来函数防护的漏洞**、**文档/许可证/元数据与代码脱节**。
+审查驱动的修复，全部由 `tests/` 里的回归用例守着。四个主题：**决策评级的静默出错**、
+**未来函数防护的漏洞**、**文档/许可证/元数据与代码脱节**、**Web UI / CLI / 容器 的可用性与安全**。
 
 ### Fixed — 决策评级（静默给出错误结论）
 
@@ -141,6 +141,41 @@ Breaking changes within the 0.x line are called out explicitly.
   现在 Key 只存在本会话，经 `config["api_key"]` 传给 LLM 客户端（四个 provider 客户端
   本就优先使用显式传入的 `api_key`），输入框为空时自动回退 `.env`，清除需要点显式按钮。
   请求路径不再写 `os.environ`，也不再写 `.env`。
+
+### Fixed — 质量门控
+
+- **门控尊重本次实际选择的分析师**（`quality_gate.py` / `graph/setup.py`）：CLI 与 Web UI 都
+  允许只跑部分分析师，但门控的表格与评分循环始终按全部 9 个展开——
+  没被选中的分析师报告不存在，于是被判成「报告缺失」计入 `fail_count`（≥2 就让整轮结论
+  降级），评审 prompt 还会要求模型去评一份根本没生成的报告。现在按 `selected_analysts`
+  生成表格，未运行的行标 `—` / `未运行（本次分析未选择）` 且明确排除在失败计数之外，
+  摘要里也会列出跳过了哪些。
+
+### Fixed — Web UI 进度面板
+
+- **暂停/停止按钮真的存在**（`web/components/progress_panel.py`）：`ProgressTracker` 的
+  `pause()` / `resume()` / `request_stop()` 自写下来起**没有任何调用方**，`web/runner.py` 的
+  `_close_and_discard` / `mark_stopped` 分支因此全是死代码——一轮分析开始后既停不下来、
+  也取消不了，而它每跑一次都在真实消耗付费 LLM 调用。现在补上三个按钮，并在停止时先写下
+  提示再清 tracker（`mark_stopped()` 会清空 tracker，之后无法区分「你停的」和「从没跑过」）。
+- **阶段分组不再靠位置切片**：`progress_panel.py` 用 `PIPELINE_STAGES[:7]` / `[7:]` 分组，
+  于是最近新增的两个分析师（量价分析、宏观板块）显示在 `PIPELINE` 标题下，而代码按分析师
+  评分、门控也按 9 个分析师计数；总数还写死成 `len(PIPELINE_STAGES)`。现在阶段自带
+  `group` 字段，并由 `tests/test_progress_controls.py` 钉住 9 + 5 的划分。
+- **界面读共享状态改走快照**（`web/progress.py` 新增 `stage_snapshot()` /
+  `report_snapshot()`）：此前直接迭代 runner 线程正在写的 `stage_reports`，而
+  `request_stop()` / `mark_stopped()` 会**清空**它——「先 `in` 判断、后下标取值」碰上那一刻
+  就是 `KeyError`。两个快照都在 tracker 的锁内一次性取完（`stage_snapshot()` 刻意不调用
+  `stage_status()`，后者会重入同一把非重入锁而死锁）。
+
+### Changed — Web UI 性能
+
+- **导出与历史列表加缓存**：`web/` 此前**一处 `@st.cache_data` 都没有**，而 Streamlit 每次
+  控件交互都会重跑整个脚本、分析进行中还有 2 秒一次的自动 rerun。结果页因此每次 rerun 都
+  重新生成 PDF（对每份报告跑一遍提及归一化正则，还要嵌入 CJK 字体）并把多兆字节重新推给
+  浏览器；侧边栏每次 rerun 都全量遍历已保存日志目录。现在按输入缓存导出结果
+  （`_cached_markdown` / `_cached_pdf`）与历史列表（`_cached_history`，10 秒 TTL——新完成的
+  报告仍在主区域立即显示）。
 
 ### Fixed — 容器与配置
 

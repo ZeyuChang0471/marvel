@@ -187,6 +187,15 @@ def _detect_default_provider_idx() -> int:
     return 0
 
 
+# `get_history()` walks the whole saved-log tree. The app reruns the script every
+# two seconds while an analysis is in flight, so this ran a full directory scan
+# per rerun. A short TTL keeps the list fresh enough (a report that just finished
+# also renders in the main area immediately) while removing the per-rerun scan.
+@st.cache_data(ttl=10, show_spinner=False)
+def _cached_history() -> list[dict]:
+    return get_history()
+
+
 def _resolve_user_input(raw: str) -> tuple[str, str | None]:
     """Resolve raw user input to (ticker_code, error_msg).
 
@@ -395,7 +404,7 @@ def render_sidebar() -> None:
     st.markdown("---")
     st.markdown("#### 历史记录")
 
-    history = get_history()
+    history = _cached_history()
     if not history:
         st.caption("暂无历史记录")
         return

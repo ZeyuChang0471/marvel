@@ -15,6 +15,27 @@ def _strip_think(text: str) -> str:
     return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
 
 
+# Export generation is cached per identical final state.
+#
+# Streamlit re-executes the entire script on every widget interaction, and the
+# results page re-renders on each of those reruns. Both exporters re-run the
+# mention-normalisation regexes over every report; the PDF additionally embeds a
+# CJK font. Without caching, every rerun rebuilt the PDF and re-serialised
+# multi-megabyte bytes to the browser.
+@st.cache_data(show_spinner=False, max_entries=8)
+def _cached_markdown(
+    final_state: dict, ticker: str, trade_date: str, signal: str
+) -> str:
+    return generate_markdown(final_state, ticker, trade_date, signal)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _cached_pdf(
+    final_state: dict, ticker: str, trade_date: str, signal: str
+) -> bytes:
+    return generate_pdf(final_state, ticker, trade_date, signal)
+
+
 def _signal_style(signal: str) -> tuple[str, str]:
     s = signal.upper()
     if "SELL" in s:
@@ -98,7 +119,7 @@ def render_report(
     # lazily and guarded so a PDF/font failure never crashes the results page.
     col_md, col_pdf, col_spacer = st.columns([1, 1, 2])
     with col_md:
-        md_text = generate_markdown(final_state, ticker, trade_date, signal)
+        md_text = _cached_markdown(final_state, ticker, trade_date, signal)
         st.download_button(
             "📥 下载 Markdown",
             data=md_text.encode("utf-8"),
@@ -108,7 +129,7 @@ def render_report(
         )
     with col_pdf:
         try:
-            pdf_bytes = generate_pdf(final_state, ticker, trade_date, signal)
+            pdf_bytes = _cached_pdf(final_state, ticker, trade_date, signal)
             st.download_button(
                 "📄 下载 PDF",
                 data=pdf_bytes,

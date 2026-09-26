@@ -9,20 +9,31 @@ from typing import Any, Optional
 
 
 PIPELINE_STAGES: list[dict[str, str]] = [
-    {"id": "market", "name": "技术分析", "icon": "📊", "report_key": "market_report"},
-    {"id": "social", "name": "情绪分析", "icon": "💬", "report_key": "sentiment_report"},
-    {"id": "news", "name": "新闻舆情", "icon": "📰", "report_key": "news_report"},
-    {"id": "fundamentals", "name": "基本面", "icon": "📋", "report_key": "fundamentals_report"},
-    {"id": "policy", "name": "政策分析", "icon": "🏛️", "report_key": "policy_report"},
-    {"id": "hot_money", "name": "游资追踪", "icon": "🔥", "report_key": "hot_money_report"},
-    {"id": "lockup", "name": "解禁监控", "icon": "🔒", "report_key": "lockup_report"},
-    {"id": "volume_price", "name": "量价分析", "icon": "📉", "report_key": "volume_price_report"},
-    {"id": "macro", "name": "宏观板块", "icon": "🌐", "report_key": "macro_report"},
-    {"id": "quality_gate", "name": "质量门控", "icon": "✅", "report_key": "data_quality_summary"},
-    {"id": "debate", "name": "多空辩论", "icon": "⚔️", "report_key": "investment_plan"},
-    {"id": "trader", "name": "交易决策", "icon": "💹", "report_key": "trader_investment_plan"},
-    {"id": "risk", "name": "风控评估", "icon": "🛡️", "report_key": "risk_debate_state"},
-    {"id": "pm", "name": "最终决策", "icon": "👔", "report_key": "final_trade_decision"},
+    # `group` exists so the UI can label the stages without positional slicing:
+    # progress_panel.py used `PIPELINE_STAGES[:7]` / `[7:]`, which put the two
+    # most recently added analysts (量价分析, 宏观板块) under the "PIPELINE"
+    # heading while the code graded them as analysts.
+    {"id": "market", "name": "技术分析", "icon": "📊", "report_key": "market_report", "group": "analyst"},
+    {"id": "social", "name": "情绪分析", "icon": "💬", "report_key": "sentiment_report", "group": "analyst"},
+    {"id": "news", "name": "新闻舆情", "icon": "📰", "report_key": "news_report", "group": "analyst"},
+    {"id": "fundamentals", "name": "基本面", "icon": "📋", "report_key": "fundamentals_report", "group": "analyst"},
+    {"id": "policy", "name": "政策分析", "icon": "🏛️", "report_key": "policy_report", "group": "analyst"},
+    {"id": "hot_money", "name": "游资追踪", "icon": "🔥", "report_key": "hot_money_report", "group": "analyst"},
+    {"id": "lockup", "name": "解禁监控", "icon": "🔒", "report_key": "lockup_report", "group": "analyst"},
+    {"id": "volume_price", "name": "量价分析", "icon": "📉", "report_key": "volume_price_report", "group": "analyst"},
+    {"id": "macro", "name": "宏观板块", "icon": "🌐", "report_key": "macro_report", "group": "analyst"},
+    {"id": "quality_gate", "name": "质量门控", "icon": "✅", "report_key": "data_quality_summary", "group": "pipeline"},
+    {"id": "debate", "name": "多空辩论", "icon": "⚔️", "report_key": "investment_plan", "group": "pipeline"},
+    {"id": "trader", "name": "交易决策", "icon": "💹", "report_key": "trader_investment_plan", "group": "pipeline"},
+    {"id": "risk", "name": "风控评估", "icon": "🛡️", "report_key": "risk_debate_state", "group": "pipeline"},
+    {"id": "pm", "name": "最终决策", "icon": "👔", "report_key": "final_trade_decision", "group": "pipeline"},
+]
+
+ANALYST_STAGES: list[dict[str, str]] = [
+    s for s in PIPELINE_STAGES if s.get("group") == "analyst"
+]
+PIPELINE_ONLY_STAGES: list[dict[str, str]] = [
+    s for s in PIPELINE_STAGES if s.get("group") != "analyst"
 ]
 
 STAGE_IDS = [s["id"] for s in PIPELINE_STAGES]
@@ -109,6 +120,36 @@ class ProgressTracker:
 
     def wait_if_paused(self) -> None:
         self._pause_gate.wait()
+
+    def report_snapshot(self) -> dict[str, str]:
+        """Copy of the completed stage reports, taken under the lock.
+
+        The UI must not iterate `stage_reports` directly: the runner thread
+        writes it, and both `request_stop` and `mark_stopped` **clear** it. A
+        membership test followed by an index outside the lock is a `KeyError`
+        waiting for exactly that moment.
+        """
+        with self._lock:
+            return dict(self.stage_reports)
+
+    def stage_snapshot(self) -> dict[str, str]:
+        """Copy of stage id -> status, read under a single lock acquisition.
+
+        Deliberately does **not** call `stage_status()`: that acquires the same
+        non-reentrant lock, so calling it from inside this one would deadlock.
+        """
+        with self._lock:
+            completed = set(self.completed_stages)
+            current = self.current_stage
+
+        return {
+            stage["id"]: (
+                "done" if stage["id"] in completed
+                else "active" if stage["id"] == current
+                else "pending"
+            )
+            for stage in PIPELINE_STAGES
+        }
 
     def mark_stopped(self) -> None:
         with self._lock:

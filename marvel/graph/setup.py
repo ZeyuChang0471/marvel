@@ -125,8 +125,13 @@ class GraphSetup:
             delete_nodes["macro"] = create_msg_delete()
             tool_nodes["macro"] = self.tool_nodes["macro"]
 
-        # Create quality gate node
-        quality_gate_node = create_quality_gate(self.quick_thinking_llm)
+        # Create quality gate node.
+        # Pass the selection so the gate can mark unselected analysts as
+        # "未运行" instead of grading their empty reports F (four of those used to
+        # skip the LLM review entirely).
+        quality_gate_node = create_quality_gate(
+            self.quick_thinking_llm, selected_analysts
+        )
 
         # Create researcher and manager nodes
         bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
