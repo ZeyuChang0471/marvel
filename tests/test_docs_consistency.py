@@ -288,15 +288,30 @@ class TestLicenceMetadata:
 
 @pytest.mark.unit
 class TestReadmeConfigTable:
+    @staticmethod
+    def _effective_default(src: str, key: str) -> str | None:
+        """The value in effect when the environment is unset.
+
+        Handles both a plain literal and the env-overridable form
+        ``os.getenv("VAR", "fallback")`` — for the latter the *fallback* is the
+        default a reader of the README would get.
+        """
+        env_form = re.search(
+            rf'"{key}":\s*os\.getenv\(\s*"[^"]+"\s*,\s*"([^"]*)"\s*\)', src
+        )
+        if env_form:
+            return env_form.group(1)
+        literal = re.search(rf'"{key}":\s*"([^"]+)"', src)
+        return literal.group(1) if literal else None
+
     def test_default_provider_and_models_match_default_config(self):
         """README 的配置表曾写 minimax 默认值，而 default_config.py 是 openai。"""
         defaults = _read("marvel", "default_config.py")
         readme = _read("README.md")
 
         for key in ("llm_provider", "deep_think_llm", "quick_think_llm"):
-            match = re.search(rf'"{key}":\s*"([^"]+)"', defaults)
-            assert match, f"default_config.py 找不到 {key}"
-            value = match.group(1)
+            value = self._effective_default(defaults, key)
+            assert value, f"default_config.py 找不到 {key} 的有效默认值"
             row = re.search(rf"\|\s*`{key}`\s*\|\s*`\"([^\"]+)\"`", readme)
             assert row, f"README 的配置表缺少 {key} 行"
             assert row.group(1) == value, (

@@ -20,7 +20,7 @@ from marvel.default_config import DEFAULT_CONFIG  # noqa: E402
 
 from web.components.progress_panel import render_progress  # noqa: E402
 from web.components.report_viewer import render_report  # noqa: E402
-from web.components.sidebar import render_sidebar  # noqa: E402
+from web.components.sidebar import render_sidebar, session_api_key  # noqa: E402
 from web.history import extract_signal, load_analysis  # noqa: E402
 from web.progress import ProgressTracker  # noqa: E402
 from web.runner import run_analysis_in_thread  # noqa: E402
@@ -187,12 +187,18 @@ st.markdown(
 
 def _build_config() -> dict:
     config = DEFAULT_CONFIG.copy()
-    config["llm_provider"] = st.session_state.get("llm_provider", "minimax")
+    provider = st.session_state.get("llm_provider", "minimax")
+    config["llm_provider"] = provider
     config["deep_think_llm"] = st.session_state.get("deep_think_llm", "MiniMax-M2.7")
     config["quick_think_llm"] = st.session_state.get("quick_think_llm", "MiniMax-M2.7-highspeed")
     # Optional third-party / proxy endpoint. Sidebar input wins, else .env BACKEND_URL.
     backend_url = (st.session_state.get("llm_base_url") or os.getenv("BACKEND_URL") or "").strip()
     config["backend_url"] = backend_url or None
+    # The key this browser session typed, if any. It is passed to the client
+    # through the per-run config rather than copied into os.environ, so two
+    # sessions analysing different stocks cannot see or spend each other's key.
+    # When absent the client falls back to the operator's .env variable.
+    config["api_key"] = session_api_key(provider)
     config["data_vendors"] = {
         "core_stock_apis": "a_stock",
         "technical_indicators": "a_stock",

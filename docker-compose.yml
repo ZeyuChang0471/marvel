@@ -1,4 +1,6 @@
 services:
+  # Interactive CLI. This is the image's default ENTRYPOINT (`marvel`).
+  # Start it explicitly:  docker compose run --rm marvel
   marvel:
     build: .
     env_file:
@@ -7,6 +9,29 @@ services:
       - marvel_data:/home/appuser/.marvel
     tty: true
     stdin_open: true
+
+  # Streamlit Web UI.
+  # Start it explicitly:  docker compose up -d marvel-web
+  # then open http://localhost:8501
+  marvel-web:
+    build: .
+    command: ["marvel-web"]
+    env_file:
+      - .env
+    environment:
+      # The app binds to 127.0.0.1 by default (see .streamlit/config.toml), which
+      # would be unreachable from the host through a port mapping. Bind all
+      # interfaces *inside the container* and keep the host mapping on loopback
+      # below, so the UI is still only reachable from this machine.
+      # Do not widen the host mapping without putting an authenticating reverse
+      # proxy in front — the UI has no login.
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+    ports:
+      - "127.0.0.1:8501:8501"
+    volumes:
+      - marvel_data:/home/appuser/.marvel
 
   ollama:
     image: ollama/ollama:latest
@@ -20,7 +45,13 @@ services:
     env_file:
       - .env
     environment:
+      # `LLM_PROVIDER` is read by marvel/default_config.py, and BACKEND_URL
+      # overrides the client's endpoint. Both are required here: without the
+      # first this profile silently ran on the OpenAI default, and without the
+      # second the ollama client would have called its own localhost default
+      # instead of the ollama service.
       - LLM_PROVIDER=ollama
+      - BACKEND_URL=http://ollama:11434/v1
     volumes:
       - marvel_data:/home/appuser/.marvel
     depends_on:

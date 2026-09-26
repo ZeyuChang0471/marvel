@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from datetime import date
-from pathlib import Path
 
 import streamlit as st
 
@@ -27,8 +26,8 @@ _PROVIDERS: list[tuple[str, str]] = [
 _PROVIDER_DISPLAY = [name for name, _ in _PROVIDERS]
 _PROVIDER_KEYS = [key for _, key in _PROVIDERS]
 
-# Map provider key → env var whose presence signals "this provider is configured".
-# Ollama is local so it's always considered ready.
+# Map provider key → env var an operator may have set in .env.
+# Ollama is local so it needs no key.
 _PROVIDER_KEY_ENV: dict[str, str | None] = {
     "minimax": "MINIMAX_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
@@ -43,16 +42,52 @@ _PROVIDER_KEY_ENV: dict[str, str | None] = {
 
 _PROVIDER_LABELS: dict[str, str] = {key: name for name, key in _PROVIDERS}
 
-# The project .env lives at the repo root and is listed in .gitignore, so a
-# key typed into the UI is applied to this process and persisted locally
-# without ever being committed.
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_ENV_PATH = _PROJECT_ROOT / ".env"
+# API keys are held **per browser session**, in st.session_state. They are not
+# written to os.environ and not written to .env.
+#
+# Why: Streamlit serves every user from a single process, so the previous
+# behaviour (``os.environ[env_var] = value`` plus editing the shared project
+# .env) meant one visitor's key was visible to — and billed to — every other
+# session, and a visitor who submitted an empty field silently deleted the
+# operator's key out of .env.
+#
+# Keys now travel to the LLM client through the per-run config
+# (web/app.py::_build_config -> MarvelGraph -> create_llm_client), which all
+# four provider clients already prefer over the environment.
+_API_KEYS = "_api_keys"
 _API_KEY_STATUS = "_api_key_status"
+_KEY_INPUT_PREFIX = "api_key_input_"
 
 
 def _api_key_widget_key(provider_key: str) -> str:
-    return f"api_key_input_{provider_key}"
+    return f"{_KEY_INPUT_PREFIX}{provider_key}"
+
+
+def _session_api_keys() -> dict[str, str]:
+    """Keys this browser session has entered, keyed by provider."""
+    keys = st.session_state.get(_API_KEYS)
+    if not isinstance(keys, dict):
+        keys = {}
+        st.session_state[_API_KEYS] = keys
+    return keys
+
+
+def session_api_key(provider_key: str) -> str | None:
+    """Key entered in this browser session for ``provider_key``, if any."""
+    return _session_api_keys().get(provider_key) or None
+
+
+def operator_api_key(provider_key: str) -> str | None:
+    """Key the operator supplied via .env / the process environment, if any."""
+    env_var = _PROVIDER_KEY_ENV.get(provider_key)
+    if not env_var:
+        return None
+    return (os.environ.get(env_var) or "").strip() or None
+
+
+def effective_api_key(provider_key: str) -> str | None:
+    """Session key wins over the operator's — same order the clients use."""
+    return session_api_key(provider_key) or operator_api_key(provider_key)
 
 
 def _mask_key(value: str) -> str:
@@ -60,66 +95,34 @@ def _mask_key(value: str) -> str:
     return f"****{value[-4:]}" if len(value) > 4 else "****"
 
 
-def _persist_env_var(env_var: str, value: str | None) -> tuple[bool, str]:
-    """Write (or blank out) one variable in the project .env file.
-
-    Comments and every other variable are preserved. Returns (ok, error).
-    """
-    try:
-        lines = (
-            _ENV_PATH.read_text(encoding="utf-8").splitlines()
-            if _ENV_PATH.exists()
-            else []
-        )
-    except OSError as exc:
-        return False, f"读取 .env 失败：{exc}"
-
-    assignment = f"{env_var}={value}" if value else f"{env_var}="
-    for i, line in enumerate(lines):
-        if line.strip().startswith(f"{env_var}=") or line.strip() == env_var:
-            lines[i] = assignment
-            break
-    else:
-        if lines and lines[-1].strip():
-            lines.append("")
-        lines.append(assignment)
-
-    try:
-        _ENV_PATH.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
-    except OSError as exc:
-        return False, f"写入 .env 失败：{exc}"
-    return True, ""
-
-
-def _apply_api_key(provider_key: str) -> None:
-    """Apply the key typed in the sidebar to os.environ and to .env.
-
-    Runs as a widget callback, i.e. before the rerun's script body, so the
-    value is already in the environment by the time the graph (and with it
-    the LLM client) is built.
-    """
-    env_var = _PROVIDER_KEY_ENV.get(provider_key)
-    if not env_var:
+def _store_api_key(provider_key: str) -> None:
+    """Widget callback: remember the typed key **for this session only**."""
+    if not _PROVIDER_KEY_ENV.get(provider_key):
         return
 
     value = (st.session_state.get(_api_key_widget_key(provider_key)) or "").strip()
 
     if value:
-        os.environ[env_var] = value
-        ok, err = _persist_env_var(env_var, value)
+        _session_api_keys()[provider_key] = value
         st.session_state[_API_KEY_STATUS] = (
-            ("success", f"已保存 `{env_var}`，本次分析立即可用。")
-            if ok
-            else ("warning", f"本次会话已生效，但写入 .env 失败：{err}")
+            "success",
+            "已用于本次会话。Key 只保存在你的浏览器会话里，不会写入 .env，"
+            "也不会影响其他使用者或他们的分析费用。",
         )
     else:
-        os.environ.pop(env_var, None)
-        ok, err = _persist_env_var(env_var, None)
+        # 空输入不再清除任何东西。以前清空输入框再回车，会把 .env 里那把
+        # 运维配置的 key 抹掉——而且是**对所有会话**生效。
         st.session_state[_API_KEY_STATUS] = (
-            ("info", f"已清除 `{env_var}`。")
-            if ok
-            else ("warning", f"写入 .env 失败：{err}")
+            "info",
+            "输入框为空，未做任何改动。要停用本会话的 Key，请点下方的「清除」。",
         )
+
+
+def _clear_api_key(provider_key: str) -> None:
+    """Explicitly drop this session's key for one provider."""
+    _session_api_keys().pop(provider_key, None)
+    st.session_state[_api_key_widget_key(provider_key)] = ""
+    st.session_state[_API_KEY_STATUS] = ("info", "已清除本次会话保存的 Key。")
 
 
 def _render_api_key_input(provider_key: str) -> None:
@@ -130,26 +133,38 @@ def _render_api_key_input(provider_key: str) -> None:
         st.caption("ℹ️ Ollama 使用本地模型，无需 API Key。")
         return
 
-    configured = (os.environ.get(env_var) or "").strip()
-    if configured:
-        st.caption(f"✅ `{env_var}` 已配置 · `{_mask_key(configured)}`")
+    typed = session_api_key(provider_key)
+    from_env = operator_api_key(provider_key)
+
+    if typed:
+        st.caption(f"✅ 本次会话已输入 · `{_mask_key(typed)}`")
+    elif from_env:
+        st.caption(f"✅ 由 `.env` / 环境变量提供 · `{_mask_key(from_env)}`")
     else:
-        st.caption(f"⚠️ `{env_var}` 未配置")
+        st.caption(f"⚠️ 未配置（需要 `{env_var}`）")
 
     st.text_input(
         "API Key",
         key=_api_key_widget_key(provider_key),
         type="password",
-        placeholder="粘贴 Key 后按回车即生效",
-        on_change=_apply_api_key,
+        placeholder="粘贴 Key 后按回车",
+        on_change=_store_api_key,
         args=(provider_key,),
         help=(
-            f"{_PROVIDER_LABELS.get(provider_key, provider_key)} 使用环境变量 "
-            f"{env_var}。在此粘贴后按回车：立即对本次会话生效，并写入项目根目录的 "
-            ".env（该文件已被 .gitignore 忽略，不会被提交）。"
-            "留空后按回车可清除已保存的 Key。"
+            f"{_PROVIDER_LABELS.get(provider_key, provider_key)} 通常由环境变量 "
+            f"{env_var} 提供。在这里粘贴后按回车，只对**你自己的浏览器会话**生效："
+            "不会写入 .env，不会影响其他人的分析，也不会动运维配置的那把 Key。"
+            "需要长期配置请写进 .env（CLI 与 Docker 也用它）。"
         ),
     )
+
+    if typed:
+        st.button(
+            "清除本次会话的 Key",
+            key=f"clear_api_key_{provider_key}",
+            on_click=_clear_api_key,
+            args=(provider_key,),
+        )
 
     status = st.session_state.pop(_API_KEY_STATUS, None)
     if status:
@@ -158,7 +173,7 @@ def _render_api_key_input(provider_key: str) -> None:
 
 
 def _detect_default_provider_idx() -> int:
-    """Return the index of the first provider whose API key is configured.
+    """Index of the first provider this session or the operator can already use.
 
     Scans providers in display order.  Ollama (local) never wins this scan
     because it needs no key — when nothing at all is configured we fall back
@@ -166,10 +181,7 @@ def _detect_default_provider_idx() -> int:
     the user can paste a key straight away.
     """
     for i, key in enumerate(_PROVIDER_KEYS):
-        env_var = _PROVIDER_KEY_ENV.get(key)
-        if env_var is None:
-            continue  # Ollama — needs no key
-        if (os.getenv(env_var) or "").strip():
+        if effective_api_key(key):
             return i
 
     return 0

@@ -128,6 +128,37 @@ Breaking changes within the 0.x line are called out explicitly.
   状态不落盘（CLI 跑的分析不出现在 Web 历史里）、决策不写记忆日志（反思回路对 CLI
   完全失效）。现在走 `prepare_graph_run` → stream → `finalize_graph_run`，并用
   `try/except/finally` 释放 checkpointer、把裸 traceback 换成可读错误 + 非零退出码。
+
+### Security — Web UI
+
+- **默认只绑定 `127.0.0.1`**（`.streamlit/config.toml` 的 `server.address`）。此前没设
+  该项，而 Streamlit 在未设置时绑定 `0.0.0.0`——`start.sh` / `start.bat` / `marvel-web` /
+  `run.py web` 全都把一个**没有登录**的 UI 发布到了整个网络，任何能连上端口的人都能用
+  主机上的 Key 跑付费分析。同时把 `enableCORS` / `enableXsrfProtection` 显式写成安全值。
+- **API Key 改为按浏览器会话隔离**：侧边栏此前把 Key 写进进程级 `os.environ` 与共享的
+  项目 `.env`，于是（a）一个访问者能看到、并使用其他会话的 Key（费用记在主人头上）；
+  （b）**把输入框清空再回车会删掉 `.env` 里运维配置的那把 Key，对所有会话生效**。
+  现在 Key 只存在本会话，经 `config["api_key"]` 传给 LLM 客户端（四个 provider 客户端
+  本就优先使用显式传入的 `api_key`），输入框为空时自动回退 `.env`，清除需要点显式按钮。
+  请求路径不再写 `os.environ`，也不再写 `.env`。
+
+### Fixed — 容器与配置
+
+- **`docker-compose.yml` 现在真的能跑 Web UI**：新增 `marvel-web` service
+  （`command: ["marvel-web"]` + `ports: ["127.0.0.1:8501:8501"]`；容器内显式
+  `STREAMLIT_SERVER_ADDRESS=0.0.0.0`，否则 `config.toml` 的回环默认会让端口映射失效）。
+  此前镜像的 `ENTRYPOINT` 是 CLI、全文没有任何 `ports:`，README 却让用户用 Docker 解决
+  PDF 中文字体——`docker compose up` 只会得到 CLI 提示符。
+- **`LLM_PROVIDER` 接进 `default_config.py`**：compose 的 ollama profile 一直设它，而全仓库
+  只有那一处，没有任何代码读取——那个 profile 实际仍走 OpenAI 默认值。同时给 ollama
+  profile 补上 `BACKEND_URL=http://ollama:11434/v1`（客户端默认值是 `localhost`，
+  在容器里指向自己）。
+- **`BACKEND_URL` 接进 `default_config.py`**：`.env.example` 一直记录它，但只有 Web UI 读，
+  CLI 与容器运行会忽略用户配置的端点。`LLM_PROVIDER` / `DEEP_THINK_LLM` / `QUICK_THINK_LLM`
+  也一并改为可被环境变量覆盖。
+- **`max_recur_limit` 接线**：配置项一直存在却从未被读取（`Propagator()` 用自己写死的
+  100），用户无法提高步数预算；九个分析师的常规运行就可能撞上上限，而
+  `GraphRecursionError` 会让整轮数分钟的分析作废。默认值提到 **250**。
 - **根目录不再有 import 即执行的脚本**：`test_astock.py` / `test_data_quality.py` /
   `test.py` 移为 `scripts/probe_*.py`（加 `__main__` 守卫），`main.py`（上游美股 demo，
   模块层跑一次 NVDA 分析）删除，`run.py` / `run_single.py` 的全部模块层副作用

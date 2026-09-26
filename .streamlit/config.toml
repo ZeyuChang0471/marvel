@@ -3,6 +3,17 @@ gatherUsageStats = false
 
 [server]
 headless = true
+# Streamlit's default when `address` is unset is **all interfaces** (0.0.0.0),
+# so every launch path here — start.sh, start.bat, `marvel-web`, `run.py web` —
+# used to expose an unauthenticated UI to the whole network. Bind to loopback:
+# this app has no login, and anyone who can reach it can spend the host's LLM
+# budget. For LAN access put it behind an authenticating reverse proxy and set
+# `address` explicitly (see README「Web UI」).
+address = "127.0.0.1"
+# Keep Streamlit's secure defaults explicit so a future edit cannot silently
+# drop them.
+enableCORS = true
+enableXsrfProtection = true
 
 [theme]
 base = "dark"

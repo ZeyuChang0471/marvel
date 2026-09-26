@@ -132,6 +132,17 @@ class MarvelGraph:
         if self.callbacks:
             llm_kwargs["callbacks"] = self.callbacks
 
+        # A per-run api_key (the Web UI passes the key the browser session typed)
+        # takes precedence over the environment. All four provider clients
+        # already read `api_key` from kwargs first — see
+        # llm_clients/openai_client.py and anthropic/azure/google clients — so
+        # nothing has to be copied into os.environ. That matters because
+        # Streamlit serves every session from one process: an env-var key was
+        # shared, and therefore visible and billable, across all of them.
+        api_key = (self.config.get("api_key") or "").strip()
+        if api_key:
+            llm_kwargs["api_key"] = api_key
+
         deep_client = create_llm_client(
             provider=self.config["llm_provider"],
             model=self.config["deep_think_llm"],
@@ -165,7 +176,12 @@ class MarvelGraph:
             self.conditional_logic,
         )
 
-        self.propagator = Propagator()
+        # `max_recur_limit` used to be declared in the config and never read:
+        # `Propagator()` fell back to its own hardcoded 100, so users could not
+        # raise the step budget no matter what they set.
+        self.propagator = Propagator(
+            max_recur_limit=self.config.get("max_recur_limit", 250)
+        )
         self.reflector = Reflector(self.quick_thinking_llm)
         self.signal_processor = SignalProcessor(self.quick_thinking_llm)
 

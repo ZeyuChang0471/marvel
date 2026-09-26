@@ -185,9 +185,11 @@ pip install -e .
 
 > **必须使用 API Key**，不能用 Claude/ChatGPT 订阅版。每次分析需 30-50 次 LLM 调用，只有 API 模式支持。
 
-**方式一 · Web UI 里直接填（推荐，无需重启）**：启动后展开左侧栏「⚙️ 模型配置」→ 选好「LLM 供应商」→ 在 **API Key** 输入框粘贴 Key 并按回车。Key 会立即对当前会话生效，同时写入项目根目录的 `.env`（该文件已被 `.gitignore` 忽略，不会被提交）。把输入框清空再回车即可清除已保存的 Key。
+**方式一 · Web UI 里直接填（推荐，无需重启）**：启动后展开左侧栏「⚙️ 模型配置」→ 选好「LLM 供应商」→ 在 **API Key** 输入框粘贴 Key 并按回车。Key 只保存在**你自己的浏览器会话**里，不会写入 `.env`，也不会影响其他使用者（他们看不到、也不会用你的 Key 计费）。想停用就点下方的「清除本次会话的 Key」。
 
-**方式二 · 手写 `.env`（CLI / Docker 用这个）**：在项目根目录创建 `.env` 文件，按你选择的供应商配置：
+> 为什么是这样：未设置 `.streamlit/config.toml` 的 `server.address` 时 Streamlit 默认绑定 `0.0.0.0`，而本应用**没有登录**——任何人只要能访问端口就能用主的 Key 跑付费分析。现在默认绑定 `127.0.0.1`。需要在局域网/服务器上多人使用，请自行在前面加一层**带鉴权的反向代理**（见下方「Web UI」一节）。
+
+**方式二 · 手写 `.env`（CLI / Docker，以及 Web UI 的长期配置用这个）**：在项目根目录创建 `.env` 文件，按你选择的供应商配置。Web UI 在输入框为空时会自动回退到这里的 Key：
 
 ```bash
 # ── 方案 A：MiniMax（推荐，国内直连，性价比高）──────────
@@ -278,6 +280,17 @@ streamlit run web/app.py
 
 打开浏览器访问 `http://localhost:8501`。
 
+### 访问范围与鉴权
+
+服务**默认只绑定 `127.0.0.1`**（见 `.streamlit/config.toml` 的 `server.address`），也就是只有本机能访问。这样做是因为本应用**没有登录机制**，而 Streamlit 服务所有访问者共用同一个进程——一旦暴露到网络，任何能连上端口的人都能：
+
+- 用主机上配置的 API Key 跑付费分析（费用记在你头上）；
+- 在侧边栏填入自己的 Key，或（在旧版本里）清空输入框把 `.env` 里的 Key 抹掉。
+
+API Key 现在按**浏览器会话**隔离：侧边栏里填的 Key 只存在该会话中，经 `config["api_key"]` 传给 LLM 客户端（各 provider 客户端本就优先使用显式传入的 `api_key`），不写 `os.environ`、不写 `.env`。输入框为空时自动回退到 `.env` 里的运维配置。
+
+**要开放给局域网/服务器**：不要直接把 `address` 改成 `0.0.0.0` 就完事——请在前面放一层**带鉴权的反向代理**（Nginx + Basic Auth / OAuth、Cloudflare Access 等），并显式设置 `server.address`。当前版本没有任何内置的用户认证或配额控制。
+
 ### 功能
 
 - **模型自选**：侧边栏支持 9 个 LLM 供应商切换（MiniMax/DeepSeek/Qwen/GLM/OpenAI/Anthropic/Google/xAI/Ollama）
@@ -295,6 +308,35 @@ streamlit run web/app.py
 
 ---
 
+## Docker
+
+镜像内置 `fonts-noto-cjk`，所以 PDF 导出的中文字体在容器里也是好的。
+
+```bash
+# 交互式 CLI（镜像默认 ENTRYPOINT 就是 marvel）
+docker compose run --rm marvel
+
+# Web UI → http://localhost:8501
+docker compose up -d marvel-web
+
+# 本地 ollama profile（provider 与 endpoint 都由 compose 注入）
+docker compose --profile ollama run --rm marvel-ollama
+```
+
+| service | 用途 | 启动方式 |
+|---|---|---|
+| `marvel` | 交互式 CLI | `docker compose run --rm marvel` |
+| `marvel-web` | Streamlit Web UI，**端口只映射到宿主 `127.0.0.1`** | `docker compose up -d marvel-web` |
+| `ollama` / `marvel-ollama` | 本地模型（`profiles: [ollama]`） | `docker compose --profile ollama run --rm marvel-ollama` |
+
+两个注意点：
+
+- **不要**把 `marvel-web` 的端口映射改成 `0.0.0.0:8501:8501` 就直接对外——本应用没有登录，先在前面加一层带鉴权的反向代理。
+- 容器内 `STREAMLIT_SERVER_ADDRESS=0.0.0.0` 是**刻意**的（否则端口映射到不了），安全边界靠上面那条回环映射来保证。
+- `LLM_PROVIDER` 与 `BACKEND_URL` 都由 `marvel/default_config.py` 从环境变量读取，所以 `.env` 里设的端点对 CLI 与容器同样生效（此前只有 Web UI 读 `BACKEND_URL`）。
+
+---
+
 ## 配置说明
 
 所有配置通过 `config` 字典传入，完整选项：
@@ -309,9 +351,9 @@ streamlit run web/app.py
 | `max_debate_rounds` | `1` | Bull vs Bear 辩论轮数 |
 | `max_risk_discuss_rounds` | `1` | 风险三方辩论轮数 |
 | `data_vendors` | 全部 `"a_stock"` | 数据供应商路由 |
-| `checkpoint_enabled` | `False` | 启用 SQLite 断点续跑（**注意：目前只有 Web UI 走这条路径，CLI 尚未接入，见下方「已知问题」**） |
+| `checkpoint_enabled` | `False` | 启用 SQLite 断点续跑（Web UI 与 CLI 都支持；崩溃后可用同 ticker+日期 重跑续上） |
 | `memory_log_max_entries` | `None` | 交易记忆最大条目数 |
-| `max_recur_limit` | `100` | LangGraph 步数上限。**当前版本该配置尚未接线**（`Propagator()` 用的是内置默认值），需要更大的预算请改代码 |
+| `max_recur_limit` | `250` | LangGraph 步数上限。九个分析师的长流程很容易接近旧值 100，撞上会抛 `GraphRecursionError` 并让整轮分析作废 |
 
 > 上表取自 `marvel/default_config.py`。Web UI 会覆盖其中几项：
 > 供应商／模型来自侧边栏，`max_debate_rounds` / `max_risk_discuss_rounds` 固定为 `1`，
