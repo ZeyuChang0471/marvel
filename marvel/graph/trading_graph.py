@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 import json
 from datetime import datetime, timedelta
-from typing import Dict, Any, Tuple, List, Optional
+from typing import Dict, Any, Tuple, List, Optional, Callable
 
 import yfinance as yf
 
@@ -20,6 +20,7 @@ from marvel.agents import *
 from marvel.default_config import DEFAULT_CONFIG
 from marvel.agents.utils.memory import TradingMemoryLog
 from marvel.dataflows.utils import safe_ticker_component
+from marvel.dataflows.as_of import analysis_date_as_of
 from marvel.dataflows.a_stock import _get_prefix
 from marvel.agents.utils.agent_states import (
     AgentState,
@@ -217,9 +218,9 @@ class MarvelGraph:
 
         return kwargs
 
-    def _create_tool_nodes(self) -> Dict[str, ToolNode]:
+    def _create_tool_nodes(self) -> Dict[str, Callable]:
         """Create tool nodes for different data sources using abstract methods."""
-        return {
+        nodes = {
             "market": ToolNode(
                 [
                     # Core stock data tools
@@ -296,6 +297,24 @@ class MarvelGraph:
                 ]
             ),
         }
+        # Every tool call in the run executes with the run's analysis date bound
+        # (see dataflows/as_of.py). Without this the anchoring date is whatever
+        # the model happened to type into the tool call, so a back-test could pull
+        # news or bars published after the analysis date.
+        return {
+            name: self._guard_tool_node(node) for name, node in nodes.items()
+        }
+
+    @staticmethod
+    def _guard_tool_node(tool_node: ToolNode):
+        """Bind the run's analysis date around every call the tool node makes."""
+
+        def guarded(state):
+            with analysis_date_as_of(state.get("trade_date")):
+                return tool_node.invoke(state)
+
+        guarded.__name__ = f"guard_{getattr(tool_node, 'name', 'tools')}"
+        return guarded
 
     def _fetch_returns(
         self, ticker: str, trade_date: str, holding_days: int = 5
@@ -443,7 +462,14 @@ class MarvelGraph:
         # Initialize state only for fresh runs — injecting memory-log context
         # for the PM. Passing a new initial state to an existing thread would
         # replay completed nodes.
-        past_context = self.memory_log.get_past_context(company_name)
+        #
+        # `as_of=trade_date` is not cosmetic: without it this handed a back-test
+        # the *newest* stored decisions regardless of when they were made, so
+        # re-running 2026-05-12 after a 2026-09-01 run injected the September
+        # conclusion (and its realised alpha) into the May prompt.
+        past_context = self.memory_log.get_past_context(
+            company_name, as_of=trade_date
+        )
         init_agent_state = self.propagator.create_initial_state(
             company_name, trade_date, past_context=past_context
         )

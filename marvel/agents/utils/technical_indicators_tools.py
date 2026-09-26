@@ -1,6 +1,7 @@
 from langchain_core.tools import tool
 from typing import Annotated
 from marvel.dataflows.interface import route_to_vendor
+from marvel.dataflows.as_of import anchored_date
 
 @tool
 def get_indicators(
@@ -22,6 +23,7 @@ def get_indicators(
     """
     # LLMs sometimes pass multiple indicators as a comma-separated string;
     # split and process each individually.
+    curr_date = anchored_date(curr_date)
     indicators = [i.strip().lower() for i in indicator.split(",") if i.strip()]
     results = []
     for ind in indicators:

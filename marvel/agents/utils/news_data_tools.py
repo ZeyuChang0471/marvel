@@ -2,6 +2,7 @@ from langchain_core.tools import tool
 from typing import Annotated
 import re
 from marvel.dataflows.interface import route_to_vendor
+from marvel.dataflows.as_of import anchored_date
 
 _A_STOCK_CODE_RE = re.compile(r"^\d{6}$")
 
@@ -38,6 +39,7 @@ def get_news(
     Returns:
         str: A formatted string containing news data
     """
+    end_date = anchored_date(end_date)
     ok, code_or_message = _validate_a_stock_code("get_news", ticker)
     if not ok:
         return code_or_message
@@ -59,6 +61,7 @@ def get_global_news(
     Returns:
         str: A formatted string containing global news data
     """
+    curr_date = anchored_date(curr_date)
     return route_to_vendor("get_global_news", curr_date, look_back_days, limit)
 
 @tool

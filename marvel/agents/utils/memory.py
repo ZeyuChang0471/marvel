@@ -80,9 +80,30 @@ class TradingMemoryLog:
         """Return entries with outcome:pending (for Phase B)."""
         return [e for e in self.load_entries() if e.get("pending")]
 
-    def get_past_context(self, ticker: str, n_same: int = 5, n_cross: int = 3) -> str:
-        """Return formatted past context string for agent prompt injection."""
+    def get_past_context(
+        self,
+        ticker: str,
+        n_same: int = 5,
+        n_cross: int = 3,
+        as_of: str = None,
+    ) -> str:
+        """Return formatted past context string for agent prompt injection.
+
+        ``as_of`` is the analysis date. When given, only decisions dated **on or
+        before** it are injected. This matters for back-tests: the log is
+        append-only and shared across runs, so without the bound a May analysis
+        re-run after a September run would be told what September concluded —
+        including the realised return, which is pure look-ahead.
+
+        ``None`` keeps the previous behaviour (newest entries, no bound) for
+        callers that are not a point-in-time run.
+        """
         entries = [e for e in self.load_entries() if not e.get("pending")]
+        if as_of:
+            cutoff = str(as_of)[:10]
+            entries = [
+                e for e in entries if str(e.get("date", ""))[:10] <= cutoff
+            ]
         if not entries:
             return ""
 

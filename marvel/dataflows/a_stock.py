@@ -34,6 +34,7 @@ import pandas as pd
 import requests as _requests
 
 from .utils import atomic_write_text, safe_ticker_component
+from .as_of import analysis_date, clamp_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -1078,6 +1079,7 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
 # ---- 1. get_stock_data ----
 
 
+@clamp_arguments("end_date")
 def get_stock_data(
     symbol: Annotated[str, "A-stock code (e.g. 688017, SH688017)"],
     start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
@@ -1223,6 +1225,7 @@ _INDICATOR_DESCRIPTIONS = {
 }
 
 
+@clamp_arguments("curr_date")
 def get_indicators(
     symbol: Annotated[str, "A-stock code"],
     indicator: Annotated[
@@ -1285,6 +1288,7 @@ def get_indicators(
 # ---- 3. get_fundamentals ----
 
 
+@clamp_arguments("curr_date")
 def get_fundamentals(
     ticker: Annotated[str, "A-stock code"],
     curr_date: Annotated[str, "current date"] = None,
@@ -1535,6 +1539,7 @@ def _get_financial_report_sina(
     return df.head(8)
 
 
+@clamp_arguments("curr_date")
 def get_balance_sheet(
     ticker: Annotated[str, "A-stock code"],
     freq: Annotated[str, "frequency: 'annual' or 'quarterly'"] = "quarterly",
@@ -1570,6 +1575,7 @@ def get_balance_sheet(
 # ---- 5. get_cashflow ----
 
 
+@clamp_arguments("curr_date")
 def get_cashflow(
     ticker: Annotated[str, "A-stock code"],
     freq: Annotated[str, "frequency: 'annual' or 'quarterly'"] = "quarterly",
@@ -1605,6 +1611,7 @@ def get_cashflow(
 # ---- 6. get_income_statement ----
 
 
+@clamp_arguments("curr_date")
 def get_income_statement(
     ticker: Annotated[str, "A-stock code"],
     freq: Annotated[str, "frequency: 'annual' or 'quarterly'"] = "quarterly",
@@ -1777,6 +1784,7 @@ def _parse_news_date(value) -> date | None:
         return None
 
 
+@clamp_arguments("end_date")
 def get_news(
     ticker: Annotated[str, "A-stock code"],
     start_date: Annotated[str, "Start date yyyy-mm-dd"],
@@ -1880,6 +1888,7 @@ def get_news(
 # ---- 8. get_global_news ----
 
 
+@clamp_arguments("curr_date")
 def get_global_news(
     curr_date: Annotated[str, "Current date yyyy-mm-dd"],
     look_back_days: Annotated[int, "Days to look back"] = 7,
@@ -2088,6 +2097,7 @@ def get_insider_transactions(
 # ---- 10. get_profit_forecast ----
 
 
+@clamp_arguments("curr_date")
 def get_profit_forecast(
     ticker: Annotated[str, "A-stock code"],
     curr_date: Annotated[str, "current date — 用于判断是否在复盘历史"] = None,
@@ -2184,6 +2194,7 @@ def get_profit_forecast(
 # ---- 11. get_hot_stocks ----
 
 
+@clamp_arguments("curr_date")
 def get_hot_stocks(
     curr_date: Annotated[str, "Date YYYY-MM-DD, empty string for today"] = "",
 ) -> str:
@@ -2328,6 +2339,7 @@ def _load_northbound_history(n: int = 20) -> list[tuple[str, float, float]]:
     return rows[-n:]
 
 
+@clamp_arguments("curr_date")
 def get_northbound_flow(
     curr_date: Annotated[str, "Date YYYY-MM-DD"],
     include_history: Annotated[
@@ -2525,6 +2537,12 @@ def get_concept_blocks(
             "",
         ]
 
+        # 这个接口没有日期参数：板块归属基本静态，但每个板块带的**当日涨跌幅**是
+        # 此刻的值。分析历史日期时不说明，就等于把今天的板块表现当成当天的。
+        run_date = analysis_date()
+        if run_date is not None and _is_historical(run_date.isoformat()):
+            lines.insert(1, _snapshot_notice(run_date.isoformat(), "概念板块归属与当日涨跌"))
+
         concept_names: list[str] = []
 
         for cat in categories:
@@ -2554,6 +2572,7 @@ def get_concept_blocks(
 # ---- 14. get_fund_flow ----
 
 
+@clamp_arguments("curr_date")
 def get_fund_flow(
     ticker: Annotated[str, "A-stock code"],
     curr_date: Annotated[str, "Date YYYY-MM-DD"],
@@ -2711,6 +2730,7 @@ def get_fund_flow(
 # 15. Dragon Tiger Board (龙虎榜)
 # ---------------------------------------------------------------------------
 
+@clamp_arguments("trade_date")
 def get_dragon_tiger_board(
     ticker: str,
     trade_date: str,
@@ -2839,6 +2859,7 @@ def get_dragon_tiger_board(
 # 16. Lockup Expiry Calendar (限售解禁日历)
 # ---------------------------------------------------------------------------
 
+@clamp_arguments("trade_date")
 def get_lockup_expiry(
     ticker: str,
     trade_date: str,
@@ -2956,6 +2977,7 @@ def _industry_rank_row(rank: int, row: dict) -> str:
     )
 
 
+@clamp_arguments("trade_date")
 def get_industry_comparison(
     ticker: str,
     trade_date: str,

@@ -1,6 +1,7 @@
 from langchain_core.tools import tool
 from typing import Annotated
 from marvel.dataflows.interface import route_to_vendor
+from marvel.dataflows.as_of import anchored_date
 
 
 # 三张财报的 `curr_date` 都是**必填**，刻意不给默认值。
@@ -30,6 +31,7 @@ def get_fundamentals(
     Returns:
         str: A formatted report containing comprehensive fundamental data
     """
+    curr_date = anchored_date(curr_date)
     return route_to_vendor("get_fundamentals", ticker, curr_date)
 
 
@@ -49,6 +51,7 @@ def get_balance_sheet(
     Returns:
         str: A formatted report containing balance sheet data
     """
+    curr_date = anchored_date(curr_date)
     return route_to_vendor(
         "get_balance_sheet", ticker=ticker, freq=freq, curr_date=curr_date
     )
@@ -70,6 +73,7 @@ def get_cashflow(
     Returns:
         str: A formatted report containing cash flow statement data
     """
+    curr_date = anchored_date(curr_date)
     return route_to_vendor(
         "get_cashflow", ticker=ticker, freq=freq, curr_date=curr_date
     )
@@ -91,6 +95,7 @@ def get_income_statement(
     Returns:
         str: A formatted report containing income statement data
     """
+    curr_date = anchored_date(curr_date)
     return route_to_vendor(
         "get_income_statement", ticker=ticker, freq=freq, curr_date=curr_date
     )

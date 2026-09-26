@@ -1,6 +1,7 @@
 from langchain_core.tools import tool
 from typing import Annotated
 from marvel.dataflows.interface import route_to_vendor
+from marvel.dataflows.as_of import anchored_date
 
 
 @tool
@@ -19,4 +20,5 @@ def get_stock_data(
     Returns:
         str: A formatted dataframe containing the stock price data for the specified stock code in the specified date range.
     """
+    end_date = anchored_date(end_date)
     return route_to_vendor("get_stock_data", symbol, start_date, end_date)
