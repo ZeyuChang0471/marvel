@@ -39,19 +39,25 @@ def pytest_runtest_logreport(report):
     checks API — which is the difference between "CI is red" and "this test
     failed, on this line, for this reason".
 
+    Every phase is reported, not just ``call``: a fixture that fails during setup
+    or a teardown error fails the test without ever running its body, and those
+    were exactly the failures this hook first missed (the annotation count stayed
+    at 2 while the suite was red).
+
     Written to ``sys.__stdout__`` on purpose: pytest captures stdout, and a
     captured annotation line never reaches the runner.
     """
-    if report.when != "call" or not report.failed:
+    if not report.failed:
         return
 
     path, lineno, _ = report.location
     path = str(path).replace("\\", "/")
     lines = [line for line in (report.longreprtext or "").splitlines() if line.strip()]
-    detail = lines[-1].strip().replace("`", "'")[:350] if lines else "failed"
+    detail = lines[-1].strip().replace("`", "'")[:300] if lines else "failed"
+    phase = "" if report.when == "call" else f" [{report.when}]"
     stream = sys.__stdout__ or sys.stdout
     print(
-        f"::error file={path},line={lineno + 1}::{report.nodeid} — {detail}",
+        f"::error file={path},line={lineno + 1}::{report.nodeid}{phase} — {detail}",
         file=stream,
         flush=True,
     )
