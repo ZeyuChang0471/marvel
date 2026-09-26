@@ -105,9 +105,21 @@ Breaking changes within the 0.x line are called out explicitly.
   README「致谢与代码血缘」、`NOTICE` 与 `LICENSING.md`（Apache-2.0 §4 要求随分发保留）。
 - **`CHANGELOG.md` 标注为继承自上游**并说明旧路径/环境变量；`CHANGES_FROM_UPSTREAM.md`
   与 `DEV_LOG.md` 加上「计数与包名已过时」的说明；`issues/` 标注为上游归档。
-- **清掉零引用的图片资产**：`assets/wechat-sponsor.jpg`（随捐赠段移除）以及 5 张旧流水线
-  的角色图 `analyst.png` / `researcher.png` / `risk.png` / `schema.png` / `trader.png`
-  ——它们画的是 7 分析师时代的架构，README 早已不再引用。
+- **清掉零引用的图片资产**：`assets/wechat-sponsor.jpg`（随捐赠段移除）、5 张旧流水线的
+  角色图（`analyst` / `researcher` / `risk` / `schema` / `trader.png`，画的是 7 分析师时代
+  的架构），以及 `assets/cli/` 下 4 张**上游 TradingAgents 的 CLI 截图**——它们显示 4 个
+  分析师、美股 SPY、上游字标与工具名，其中一张还写着「trim SPY exposure by ~25-30%」，
+  正是 LICENSING.md 声明已移除的仓位建议。
+- **CLI 补齐到 9 个分析师**：`cli/models.py`、`cli/utils.py:ANALYST_ORDER`、
+  `MessageBuffer.ANALYST_MAPPING` 与 `REPORT_SECTIONS`、`main.ANALYST_ORDER` 共 **5 处**各自
+  维护着一份只有 4 个分析师的清单。最严重的是 `cli/main.py` 用本地那份过滤要传给
+  `MarvelGraph` 的选择——**A 股特化的 5 个分析师在 CLI 里根本跑不起来**，报告也不显示。
+  现在统一到 `cli/models.py` 的单一注册表，并由 `tests/test_cli_consistency.py` 对齐
+  `marvel/graph/setup.py`。
+- **CLI 去掉上游遗留**：welcome 字标曾拼的是 `TradingAgents`（同一屏标题却是 MARVEL）；
+  打印过 `© Tauric Research`（等于主张本项目的版权归属，已改为归属表述）；默认股票与
+  示例仍是 `SPY` / `CNC.TO` / `7203.T` / `0700.HK`（**每一个都会被 `safe_ticker_component`
+  拒绝**），现改为 `600519` 与 A 股示例。
 - **CI 的 action 升到 Node 24 版本**：`actions/checkout@v4 → @v5`、
   `actions/setup-python@v5 → @v6`，清掉每次运行都出现的 Node 20 弃用告警。
 - **根目录不再有 import 即执行的脚本**：`test_astock.py` / `test_data_quality.py` /

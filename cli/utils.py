@@ -3,18 +3,25 @@ from typing import List, Optional, Tuple, Dict
 
 from rich.console import Console
 
-from cli.models import AnalystType
+from cli.models import (
+    ANALYST_DISPLAY_NAMES,
+    ANALYST_SELECTION_ORDER,
+    AnalystType,
+)
 from marvel.llm_clients.model_catalog import get_model_options
 
 console = Console()
 
-TICKER_INPUT_EXAMPLES = "Examples: SPY, CNC.TO, 7203.T, 0700.HK"
+# A-share examples. The previous list (SPY / CNC.TO / 7203.T / 0700.HK) was
+# upstream's US-Canada-Japan-HK set — and `safe_ticker_component` rejects every
+# one of them, so following the prompt was a guaranteed validation error.
+TICKER_INPUT_EXAMPLES = "Examples: 600519, 300750, 688017, 贵州茅台"
 
+# Built from the single analyst registry in cli/models.py so the menu can never
+# fall behind the graph again.
 ANALYST_ORDER = [
-    ("Market Analyst", AnalystType.MARKET),
-    ("Social Media Analyst", AnalystType.SOCIAL),
-    ("News Analyst", AnalystType.NEWS),
-    ("Fundamentals Analyst", AnalystType.FUNDAMENTALS),
+    (ANALYST_DISPLAY_NAMES[key], AnalystType(key))
+    for key in ANALYST_SELECTION_ORDER
 ]
 
 

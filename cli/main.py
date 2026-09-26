@@ -26,7 +26,13 @@ from rich.rule import Rule
 
 from marvel.graph.trading_graph import MarvelGraph
 from marvel.default_config import DEFAULT_CONFIG
-from cli.models import AnalystType
+from cli.models import (
+    ANALYST_DISPLAY_NAMES,
+    ANALYST_REPORT_KEYS,
+    ANALYST_SELECTION_ORDER,
+    AnalystType,
+    analyst_agent_name,
+)
 from cli.utils import *
 from cli.announcements import fetch_announcements, display_announcements
 from cli.stats_handler import StatsCallbackHandler
@@ -50,22 +56,19 @@ class MessageBuffer:
         "Portfolio Management": ["Portfolio Manager"],
     }
 
-    # Analyst name mapping
-    ANALYST_MAPPING = {
-        "market": "Market Analyst",
-        "social": "Social Analyst",
-        "news": "News Analyst",
-        "fundamentals": "Fundamentals Analyst",
-    }
+    # Analyst name mapping — from the single registry in cli/models.py.
+    # This used to be one of four hand-maintained copies that all listed only
+    # the four upstream analysts, so the A-share roles never appeared here.
+    ANALYST_MAPPING = ANALYST_DISPLAY_NAMES
 
     # Report section mapping: section -> (analyst_key for filtering, finalizing_agent)
     # analyst_key: which analyst selection controls this section (None = always included)
     # finalizing_agent: which agent must be "completed" for this report to count as done
     REPORT_SECTIONS = {
-        "market_report": ("market", "Market Analyst"),
-        "sentiment_report": ("social", "Social Analyst"),
-        "news_report": ("news", "News Analyst"),
-        "fundamentals_report": ("fundamentals", "Fundamentals Analyst"),
+        **{
+            report_key: (analyst_key, ANALYST_DISPLAY_NAMES[analyst_key])
+            for analyst_key, report_key in ANALYST_REPORT_KEYS.items()
+        },
         "investment_plan": (None, "Research Manager"),
         "trader_investment_plan": (None, "Trader"),
         "final_trade_decision": (None, "Portfolio Manager"),
@@ -258,7 +261,11 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
     layout["header"].update(
         Panel(
             "[bold green]Welcome to MARVEL CLI[/bold green]\n"
-            "[dim]© [Tauric Research](https://github.com/TauricResearch)[/dim]",
+            # Attribution, not a copyright claim: MARVEL is a fork. The previous
+            # "© Tauric Research" stated that the copyright in *this* project
+            # belongs to the upstream organisation, which is not true.
+            "[dim]A-share fork of [TauricResearch/TradingAgents]"
+            "(https://github.com/TauricResearch/TradingAgents) · see NOTICE[/dim]",
             title="Welcome to MARVEL",
             border_style="green",
             padding=(1, 2),
@@ -472,7 +479,8 @@ def get_user_selections():
     welcome_content += "[bold]Workflow Steps:[/bold]\n"
     welcome_content += "I. Analyst Team → II. Research Team → III. Trader → IV. Risk Management → V. Portfolio Management\n\n"
     welcome_content += (
-        "[dim]Built by [Tauric Research](https://github.com/TauricResearch)[/dim]"
+        "[dim]A-share fork of [TauricResearch/TradingAgents]"
+        "(https://github.com/TauricResearch/TradingAgents) · see NOTICE[/dim]"
     )
 
     # Create and center the welcome box
@@ -503,8 +511,9 @@ def get_user_selections():
     console.print(
         create_question_box(
             "Step 1: Ticker Symbol",
-            "Enter the exact ticker symbol to analyze, including exchange suffix when needed (examples: SPY, CNC.TO, 7203.T, 0700.HK)",
-            "SPY",
+            "Enter the A-share code to analyze — 6 digits, or a Chinese name "
+            "(examples: 600519, 300750, 688017, 贵州茅台)",
+            "600519",
         )
     )
     selected_ticker = get_ticker()
@@ -623,7 +632,7 @@ def get_ticker():
     from marvel.dataflows.utils import safe_ticker_component
 
     while True:
-        raw = typer.prompt("", default="SPY")
+        raw = typer.prompt("", default="600519")
         try:
             return safe_ticker_component(raw.strip())
         except ValueError as exc:
@@ -809,20 +818,10 @@ def update_research_team_status(status):
         message_buffer.update_agent_status(agent, status)
 
 
-# Ordered list of analysts for status transitions
-ANALYST_ORDER = ["market", "social", "news", "fundamentals"]
-ANALYST_AGENT_NAMES = {
-    "market": "Market Analyst",
-    "social": "Social Analyst",
-    "news": "News Analyst",
-    "fundamentals": "Fundamentals Analyst",
-}
-ANALYST_REPORT_MAP = {
-    "market": "market_report",
-    "social": "sentiment_report",
-    "news": "news_report",
-    "fundamentals": "fundamentals_report",
-}
+# Ordered list of analysts for status transitions — from the canonical registry.
+ANALYST_ORDER = list(ANALYST_SELECTION_ORDER)
+ANALYST_AGENT_NAMES = dict(ANALYST_DISPLAY_NAMES)
+ANALYST_REPORT_MAP = dict(ANALYST_REPORT_KEYS)
 
 
 def update_analyst_statuses(message_buffer, chunk):
@@ -1048,7 +1047,7 @@ def run_analysis(checkpoint: bool = False):
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
         # Update agent status to in_progress for the first analyst
-        first_analyst = f"{selections['analysts'][0].value.capitalize()} Analyst"
+        first_analyst = analyst_agent_name(selections['analysts'][0].value)
         message_buffer.update_agent_status(first_analyst, "in_progress")
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
