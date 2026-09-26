@@ -51,7 +51,28 @@ jobs:
         # `tests/` also enforces the repository's own consistency:
         #   test_docs_consistency.py  — README/CLAUDE/NOTICE/licence vs the code
         #   test_example_artifacts.py — no committed report ships price levels
-        run: pytest tests/ -q
+        #
+        # The tee/publish dance: downloading a job log needs repository admin
+        # rights, so a red build is otherwise just "exit code 1" to anyone
+        # outside. `::error::` lines are rendered as annotations, and annotations
+        # are readable with the public checks API — so the failure tail is
+        # republished in a form that can actually be seen.
+        run: |
+          set -o pipefail
+          # `set +e` around the pipeline is load-bearing: Actions runs bash with
+          # `-e`, so a failing pytest would abort the script before the publish
+          # block below ever executed — and the annotations are the whole point.
+          set +e
+          pytest tests/ -q 2>&1 | tee /tmp/pytest.log
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::error::pytest exited with status $status"
+            tail -n 12 /tmp/pytest.log | grep -v '^$' | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+          fi
+          exit "$status"
 
       - name: Confirm nothing is left uncollected at the repository root
         # The root used to ship `test_astock.py` / `test.py` / `test_data_quality.py`
