@@ -21,6 +21,7 @@ from the code and fail when the prose disagrees.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -433,6 +434,85 @@ class TestNoStaleExternalFacts:
 
         licensing = _read("LICENSING.md")
         assert "TauricResearch" in licensing and "KylinMountain" in licensing
+
+
+@pytest.mark.unit
+class TestAssetHygiene:
+    """`assets/` may only hold images that something actually references.
+
+    The removal of upstream's CLI screenshots has to *stay* removed, which is a
+    different statement from "they are absent right now":
+
+    * `assets/cli/*.png` — four **upstream TradingAgents** CLI screenshots. They
+      show a 4-analyst US-market run, upstream's wordmark and its tool names, and
+      one of them advises trimming SPY exposure by a percentage — exactly the
+      position sizing `LICENSING.md` says this fork removed.
+    * five `assets/*.png` role diagrams drawn for the 7-analyst pipeline, which
+      now describe an architecture the code no longer has.
+    * `assets/wechat-sponsor.jpg` — guarded by the donation test above.
+
+    Written as a directory-wide invariant rather than a name blacklist, so a new
+    orphan screenshot cannot be dropped in either.
+    """
+
+    _TEXT_SUFFIXES = (".md", ".py", ".toml", ".yml", ".yaml", ".txt", ".cfg", ".json")
+    _SKIP_DIRS = {
+        ".git", "venv", ".venv", ".pytest_tmp", "node_modules", "__pycache__",
+        ".mypy_cache", ".ruff_cache", ".pytest_cache",
+    }
+
+    def _referencing_text(self) -> str:
+        """Every text file a human would read the repo through, concatenated."""
+        chunks: list[str] = []
+        for root, dirs, files in os.walk(REPO_ROOT):
+            dirs[:] = [d for d in dirs if d not in self._SKIP_DIRS]
+            for name in files:
+                if not name.endswith(self._TEXT_SUFFIXES):
+                    continue
+                path = Path(root) / name
+                try:
+                    if path.stat().st_size > 2_000_000:
+                        continue
+                    chunks.append(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError):
+                    continue
+        return "\n".join(chunks)
+
+    def test_upstream_cli_screenshots_stay_deleted(self):
+        cli_dir = REPO_ROOT / "assets" / "cli"
+        leftovers = sorted(p.name for p in cli_dir.iterdir()) if cli_dir.exists() else []
+
+        assert not leftovers, (
+            f"assets/cli/ 又出现了文件：{leftovers}——"
+            "上游 CLI 截图展示的是 4 分析师的美股流程、上游字标与仓位建议，"
+            "与本仓库的 9 分析师 A 股定位及 LICENSING.md 直接冲突"
+        )
+
+    def test_superseded_role_diagrams_stay_deleted(self):
+        """7 分析师时代画的角色图不能再回来——架构已经不是那样了。"""
+        stale = [
+            name
+            for name in ("analyst.png", "researcher.png", "risk.png", "schema.png", "trader.png")
+            if (REPO_ROOT / "assets" / name).exists()
+        ]
+
+        assert not stale, f"assets/ 又出现了 7 分析师时代的旧架构图：{stale}"
+
+    def test_every_asset_is_referenced(self):
+        assets_root = REPO_ROOT / "assets"
+        assets = sorted(p for p in assets_root.rglob("*") if p.is_file())
+
+        assert assets, "assets/ 一个文件都没有了——README 的界面截图也没了？"
+
+        blob = self._referencing_text()
+        orphans = [
+            str(p.relative_to(REPO_ROOT)) for p in assets if p.name not in blob
+        ]
+
+        assert not orphans, (
+            "这些图片已经没有任何文档/代码引用，应随引用一起删除：\n  "
+            + "\n  ".join(orphans)
+        )
 
 
 # ---------------------------------------------------------------------------
