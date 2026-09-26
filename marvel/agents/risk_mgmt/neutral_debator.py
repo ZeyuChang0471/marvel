@@ -73,6 +73,7 @@ Advocate for a balanced, position-sized approach that captures A-share upside wh
             ),
             "current_conservative_response": risk_debate_state.get("current_conservative_response", ""),
             "current_neutral_response": argument,
+            "judge_decision": risk_debate_state.get("judge_decision", ""),
             "count": risk_debate_state["count"] + 1,
         }
 

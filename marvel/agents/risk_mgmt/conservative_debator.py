@@ -75,6 +75,7 @@ Demonstrate why a conservative stance is the safest path, especially given A-sha
             "current_neutral_response": risk_debate_state.get(
                 "current_neutral_response", ""
             ),
+            "judge_decision": risk_debate_state.get("judge_decision", ""),
             "count": risk_debate_state["count"] + 1,
         }
 

@@ -101,6 +101,10 @@ def run_cli() -> None:
     """CLI 交互模式：手动选择股票和分析参数。"""
     from cli.main import app
 
+    # Typer 只认识 `analyze`，而 main() 已经把 "cli" 这个 token 消费掉了：不摘掉
+    # 它，Typer 会把它当成多余的位置参数并以 "Got unexpected extra argument(s)"
+    # 退出，交互式 CLI 根本起不来。
+    sys.argv = [sys.argv[0], *sys.argv[2:]]
     # typer 会接管交互，我们在前面已经预设了 config
     app()
 

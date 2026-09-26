@@ -19,7 +19,7 @@ from marvel.llm_clients import create_llm_client
 from marvel.agents import *
 from marvel.default_config import DEFAULT_CONFIG
 from marvel.agents.utils.memory import TradingMemoryLog
-from marvel.dataflows.utils import safe_ticker_component
+from marvel.dataflows.utils import atomic_write_text, safe_ticker_component
 from marvel.dataflows.as_of import analysis_date_as_of
 from marvel.dataflows.a_stock import _get_prefix
 from marvel.agents.utils.agent_states import (
@@ -231,8 +231,18 @@ class MarvelGraph:
             ),
             "social": ToolNode(
                 [
-                    # News tools for social media analysis
+                    # Must mirror `social_media_analyst`'s own `tools` list. It
+                    # used to hold only `get_news`, so the analyst's three other
+                    # tools — including `get_fund_flow`, which its prompt calls
+                    # "情绪最硬的证据" — could never execute: LangGraph answers an
+                    # unregistered tool call with an error ToolMessage, so the
+                    # model was told the tool does not exist and the sentiment
+                    # report silently lost its main evidence. Guarded by
+                    # tests/test_tool_node_coverage.py.
                     get_news,
+                    get_fund_flow,
+                    get_hot_stocks,
+                    get_stock_data,
                 ]
             ),
             "news": ToolNode(
@@ -314,6 +324,9 @@ class MarvelGraph:
                 return tool_node.invoke(state)
 
         guarded.__name__ = f"guard_{getattr(tool_node, 'name', 'tools')}"
+        # Kept for introspection: tests compare an analyst's bound tools against
+        # what its node can actually execute (see tests/test_tool_node_coverage.py).
+        guarded.tool_node = tool_node
         return guarded
 
     def _fetch_returns(
@@ -593,8 +606,15 @@ class MarvelGraph:
         directory.mkdir(parents=True, exist_ok=True)
 
         log_path = directory / f"full_states_log_{safe_trade_date}.json"
-        with open(log_path, "w", encoding="utf-8") as f:
-            json.dump(self.log_states_dict[safe_trade_date], f, indent=4)
+        # Atomic, like every other persisted artifact in this repo. This file is
+        # hundreds of KB to a few MB of pretty-printed JSON for a nine-analyst
+        # run; a kill or power loss during a bare `open(..., "w")` truncates it in
+        # place, and the history view then raises JSONDecodeError on that run
+        # instead of showing it.
+        atomic_write_text(
+            str(log_path),
+            json.dumps(self.log_states_dict[safe_trade_date], indent=4),
+        )
 
     def process_signal(self, full_signal):
         """Process a signal to extract the core decision."""

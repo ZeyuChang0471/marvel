@@ -1,3 +1,5 @@
+import json as _json
+
 from .alpha_vantage_common import _make_api_request
 
 
@@ -7,7 +9,19 @@ def _filter_reports_by_date(result, curr_date: str):
     Prevents look-ahead bias by removing fiscal periods that end after
     the simulation's current date.
     """
-    if not curr_date or not isinstance(result, dict):
+    # `_make_api_request` returns the raw response **text**, so this guard used to
+    # bail out on its first line and never filter anything: fiscal periods ending
+    # after the analysis date went straight through. Parse, filter, and hand back
+    # the same shape the caller gave us.
+    if not curr_date:
+        return result  # nothing to filter: hand back exactly what we were given
+    was_text = isinstance(result, str)
+    if was_text:
+        try:
+            result = _json.loads(result)
+        except ValueError:
+            return result  # not JSON — nothing to filter
+    if not isinstance(result, dict):
         return result
     for key in ("annualReports", "quarterlyReports"):
         if key in result:
@@ -15,7 +29,7 @@ def _filter_reports_by_date(result, curr_date: str):
                 r for r in result[key]
                 if r.get("fiscalDateEnding", "") <= curr_date
             ]
-    return result
+    return _json.dumps(result) if was_text else result
 
 
 def get_fundamentals(ticker: str, curr_date: str = None) -> str:

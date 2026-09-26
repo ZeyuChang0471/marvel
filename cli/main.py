@@ -172,17 +172,22 @@ class MessageBuffer:
                
         if latest_section and latest_content:
             # Format the current section for display
+            # Derived from the shared registry. This dict used to list only the
+            # four upstream analysts, so the first A-share report to arrive
+            # (policy / hot_money / lockup / volume_price / macro) raised KeyError
+            # and killed the whole run minutes in, after the LLM calls were paid
+            # for. `.get` keeps a future section from doing the same.
             section_titles = {
-                "market_report": "Market Analysis",
-                "sentiment_report": "Social Sentiment",
-                "news_report": "News Analysis",
-                "fundamentals_report": "Fundamentals Analysis",
+                **{
+                    report_key: ANALYST_DISPLAY_NAMES[analyst_key]
+                    for analyst_key, report_key in ANALYST_REPORT_KEYS.items()
+                },
                 "investment_plan": "Research Team Decision",
                 "trader_investment_plan": "Trading Team Plan",
                 "final_trade_decision": "Portfolio Management Decision",
             }
             self.current_report = (
-                f"### {section_titles[latest_section]}\n{latest_content}"
+                f"### {section_titles.get(latest_section, latest_section)}\n{latest_content}"
             )
 
         # Update the final complete report

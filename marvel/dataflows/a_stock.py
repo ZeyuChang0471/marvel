@@ -648,7 +648,10 @@ def get_stock_name(code: str) -> str | None:
         str(code).strip(),
         flags=_re.IGNORECASE,
     )
-    if not _re.match(r"^[03689]\d{5}$", norm):
+    # 4xxxxx / 8xxxxx are Beijing Stock Exchange codes: `_get_prefix` and
+    # `_normalize_ticker` accept them and Tencent serves them, so this gate must
+    # accept them too (it fell back to showing the bare code in the UI label).
+    if not _re.match(r"^[034689]\d{5}$", norm):
         return None
 
     try:
@@ -811,7 +814,11 @@ def _sina_kline_fallback(code: str, start_date: str = None, end_date: str = None
 
     Returns DataFrame with columns: Date, Open, High, Low, Close, Volume.
     """
-    prefix = "sh" if code.startswith("6") else "sz"
+    # `_get_prefix` knows the Beijing exchange (`4xxxxx` / `8xxxxx` → "bj");
+    # the inline rule sent those to `sz…`, which Sina answers with `null`, so the
+    # fallback silently returned nothing for every BSE code — precisely when it is
+    # the only source left (mootdx unreachable) and the data does exist at `bj…`.
+    prefix = _get_prefix(code)
     url = (
         "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
         "CN_MarketData.getKLineData"
@@ -2784,6 +2791,10 @@ def get_dragon_tiger_board(
         lines.append(f"龙虎榜列表查询失败: {e}")
 
     # 2. 最近上榜的买卖席位 — eastmoney datacenter direct HTTP
+    # 三个列表先绑定：第一段查询抛错时 `data` 从未被赋值，后面的 `if data:`
+    # 会抛 NameError，被裸 `except: pass` 一起吞掉。
+    buy_data: list = []
+    sell_data: list = []
     try:
         if data:
             latest_date = str(data[0].get("TRADE_DATE", ""))[:10]
@@ -2828,8 +2839,9 @@ def get_dragon_tiger_board(
                         f"  {row.get('OPERATEDEPT_NAME', '')} "
                         f"| {buy_amt:.0f} | {sell_amt:.0f} | {net:.0f}"
                     )
-    except Exception:
-        pass
+    except Exception as e:
+        # 席位查询失败必须说出来：静默吞掉等于把「接口失败」呈现成「没有机构席位」。
+        lines.append(f"席位明细查询失败: {e}")
 
     # 3. 机构动向 — 从买卖席位明细筛选机构专用席位 (OPERATEDEPT_CODE="0")
     try:
@@ -2849,8 +2861,8 @@ def get_dragon_tiger_board(
                 f"| 卖出 {inst_sell/1e4:.0f} 万 "
                 f"| 净额 {(inst_buy - inst_sell)/1e4:.0f} 万"
             )
-    except Exception:
-        pass
+    except Exception as e:
+        lines.append(f"机构动向统计失败: {e}")
 
     return "\n".join(lines)
 

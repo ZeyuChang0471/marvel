@@ -76,16 +76,39 @@ class TestWebServerBinding:
         for key in ("enableCORS", "enableXsrfProtection"):
             assert server.get(key, True) is not False, f"{key} 被显式关闭了"
 
-    def test_no_launch_path_overrides_the_bind_address(self):
-        """启动路径不得用 --server.address 把回环绑定改掉而不留痕迹。"""
+    def test_no_launch_path_binds_beyond_loopback(self):
+        """No launch path may bind a non-loopback address on its own.
+
+        `web/launch.py` legitimately *states* the address (Streamlit only reads
+        `.streamlit/config.toml` relative to the CWD and the script directory, so
+        relying on the file alone meant `marvel-web` from any other directory fell
+        back to Streamlit's 0.0.0.0 default). What must never happen is a launch
+        path naming a non-loopback address as its own default.
+        """
+        import re
+
         for name in ("start.sh", "start.bat", "run.py", "web/launch.py"):
             src = _read(*name.split("/"))
             for line in src.splitlines():
                 if "--server.address" not in line:
                     continue
-                assert line.lstrip().startswith("#"), (
-                    f"{name} 覆盖了 server.address: {line.strip()}"
-                )
+                if line.lstrip().startswith("#"):
+                    continue
+                assert not re.search(r"--server\.address=(?!\{)[^\"']*", line) or (
+                    "127.0.0.1" in line or "STREAMLIT_SERVER_ADDRESS" in line
+                ), f"{name} 把绑定地址改成非回环: {line.strip()}"
+
+    def test_the_launcher_pins_loopback_explicitly(self):
+        """Relying on the config file alone was the security bug, not the fix."""
+        src = _read("web", "launch.py")
+
+        assert "DEFAULT_ADDRESS = \"127.0.0.1\"" in src, (
+            "web/launch.py 不再显式绑定回环——从非仓库根目录启动会退回 0.0.0.0"
+        )
+        assert "STREAMLIT_SERVER_ADDRESS" in src, (
+            "容器需要用这个环境变量覆盖成 0.0.0.0，不能把它写死"
+        )
+        assert "--server.address=" in src
 
 
 @pytest.mark.unit

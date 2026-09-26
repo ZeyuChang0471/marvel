@@ -301,7 +301,7 @@ else:
             <div style="color: #888; font-size: 1.1rem; max-width: 500px; line-height: 1.6;">
                 Multi-Agent Research & Valuation Engine for Long-short<br>
                 A股多Agent投研分析系统<br>
-                7位AI分析师 → 质量门控 → 多空辩论 → 风控评估 → 最终决策
+                9位AI分析师 → 质量门控 → 多空辩论 → 风控评估 → 最终决策
             </div>
             <div style="
                 margin-top: 2rem;

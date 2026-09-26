@@ -66,6 +66,7 @@ Deliver a compelling bull argument that integrates A-share market dynamics. Refu
             "bull_history": bull_history + "\n" + argument,
             "bear_history": investment_debate_state.get("bear_history", ""),
             "current_response": argument,
+            "judge_decision": investment_debate_state.get("judge_decision", ""),
             "count": investment_debate_state["count"] + 1,
         }
 

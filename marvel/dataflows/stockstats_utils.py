@@ -45,6 +45,23 @@ def _clean_dataframe(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
+def _yahoo_symbol(symbol: str) -> str:
+    """Map a 6-digit A-share code to the Yahoo symbol Yahoo actually resolves.
+
+    `yf.download("600519")` matches nothing and returns an *empty* frame rather
+    than raising, so the indicator path printed "N/A: not a trading day" for every
+    date — a wrong-symbol problem reported as a missing-data problem. The same
+    mistake was already fixed in `_fetch_returns` via `yahoo_symbol_for_a_stock`.
+    """
+    from .a_stock import _get_prefix
+
+    text = str(symbol).strip()
+    if not text.isdigit() or len(text) != 6:
+        return text  # already a Yahoo symbol (e.g. 000300.SS) or not ours to map
+    suffix = {"sh": "SS", "sz": "SZ", "bj": "BJ"}.get(_get_prefix(text))
+    return f"{text}.{suffix}" if suffix else text
+
+
 def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     """Fetch OHLCV data with caching, filtered to prevent look-ahead bias.
 
@@ -75,7 +92,7 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
         data = pd.read_csv(data_file, on_bad_lines="skip", encoding="utf-8")
     else:
         data = yf_retry(lambda: yf.download(
-            symbol,
+            _yahoo_symbol(symbol),
             start=start_str,
             end=end_str,
             multi_level_index=False,

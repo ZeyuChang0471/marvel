@@ -499,6 +499,28 @@ class TestDeferredReflection:
         assert "-5.0%" in human_content
         assert "Exit position immediately." in human_content
 
+    def test_reflect_on_final_decision_normalises_block_content(self):
+        """Providers that return typed content blocks must not poison the log.
+
+        The reflection is stored verbatim and re-injected into later prompts, so
+        a list of content blocks would land in the markdown log as a Python repr
+        — readable file, garbage memory.
+        """
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value.content = [
+            {"type": "reasoning", "text": "internal trace, must be dropped"},
+            {"type": "text", "text": "Directionally correct."},
+        ]
+        reflector = Reflector(mock_llm)
+
+        result = reflector.reflect_on_final_decision(
+            final_decision=DECISION_BUY, raw_return=0.042, alpha_return=0.021
+        )
+
+        assert isinstance(result, str), f"反思文本不是字符串：{type(result).__name__}"
+        assert result == "Directionally correct."
+        assert "reasoning" not in result and "{" not in result
+
     # MarvelGraph._fetch_returns
 
     def test_fetch_returns_valid_ticker(self):

@@ -30,6 +30,21 @@ __all__ = [
 ]
 
 
+def _load_env_file() -> None:
+    """Load the project `.env`, as every other MARVEL entry point does.
+
+    Without this the documented `python -m marvel.harness --ticker …` example
+    failed with "no DeepSeek API key found" for keys configured the standard way,
+    because nothing under `marvel/harness/` read the file.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:  # pragma: no cover - dotenv is a runtime dependency
+        return
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    load_dotenv(os.path.join(project_root, ".env"), override=False)
+
+
 class ScriptedModel:
     """Returns pre-set replies in order. For tests and deterministic runs."""
 
@@ -116,6 +131,24 @@ class LangChainToolCallingModel:
         )
 
 
+def _default_deepseek_model() -> str:
+    """A model id the `deepseek` provider actually serves.
+
+    Falling back to `DEFAULT_CONFIG["quick_think_llm"]` was wrong: that default is
+    an OpenAI model, so the harness asked api.deepseek.com for a model it does not
+    have — and the repo's own validator warned about it.
+    """
+    try:
+        from marvel.llm_clients.model_catalog import get_known_models
+
+        known = get_known_models().get("deepseek") or []
+        if known:
+            return known[0]
+    except Exception:  # noqa: BLE001 — a catalogue lookup must not block the run
+        logger.debug("could not read the DeepSeek model catalogue")
+    return "deepseek-chat"
+
+
 def create_deepseek_model(
     model: Optional[str] = None,
     *,
@@ -126,13 +159,15 @@ def create_deepseek_model(
 ) -> LangChainToolCallingModel:
     """Build a DeepSeek-backed model through the repo's existing client factory.
 
-    Falls back to ``DEFAULT_CONFIG`` and the environment so a harness run uses
-    the same provider settings as the pipeline.
+    Reads `.env` the same way every other entry point does, so a key configured
+    the documented way is actually found.
     """
     from marvel.default_config import DEFAULT_CONFIG
     from marvel.llm_clients.factory import create_llm_client
 
-    resolved_model = model or DEFAULT_CONFIG.get("quick_think_llm")
+    _load_env_file()
+
+    resolved_model = model or _default_deepseek_model()
     resolved_base_url = base_url or os.getenv("BACKEND_URL") or None
     resolved_key = (
         api_key
@@ -141,8 +176,8 @@ def create_deepseek_model(
     )
     if not resolved_key:
         raise RuntimeError(
-            "no DeepSeek API key found: pass api_key=..., or set DEEPSEEK_API_KEY "
-            "in the environment or .env"
+            "no DeepSeek API key found: pass api_key=..., or put DEEPSEEK_API_KEY "
+            "in the environment or in the project .env"
         )
 
     client = create_llm_client(

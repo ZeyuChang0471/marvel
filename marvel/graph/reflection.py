@@ -50,4 +50,14 @@ class Reflector:
                 ),
             ),
         ]
-        return self.quick_thinking_llm.invoke(messages).content
+        # The answer is written verbatim into the memory log and re-read by
+        # future analysts, so it must be a string. Providers that return typed
+        # content blocks (OpenAI Responses, Gemini 3) would otherwise store the
+        # repr of a list of dicts as the "reflection" — the log stays readable,
+        # the reflection is silently garbage, and it is then injected into every
+        # later prompt for that ticker. Same normalisation the structured-output
+        # fallback already needed.
+        from marvel.llm_clients.base_client import normalize_content
+
+        response = self.quick_thinking_llm.invoke(messages)
+        return normalize_content(response).content
