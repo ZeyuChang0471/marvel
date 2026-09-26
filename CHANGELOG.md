@@ -122,6 +122,12 @@ Breaking changes within the 0.x line are called out explicitly.
   拒绝**），现改为 `600519` 与 A 股示例。
 - **CI 的 action 升到 Node 24 版本**：`actions/checkout@v4 → @v5`、
   `actions/setup-python@v5 → @v6`，清掉每次运行都出现的 Node 20 弃用告警。
+- **CLI 改走与 Web UI 相同的驱动路径**：`cli/main.py` 原先直接调
+  `propagator.create_initial_state` / `get_graph_args` 并自己 `process_signal` 收尾，
+  于是 **`--checkpoint` 是空操作**（checkpointer 从未安装）、记忆日志上下文不注入、
+  状态不落盘（CLI 跑的分析不出现在 Web 历史里）、决策不写记忆日志（反思回路对 CLI
+  完全失效）。现在走 `prepare_graph_run` → stream → `finalize_graph_run`，并用
+  `try/except/finally` 释放 checkpointer、把裸 traceback 换成可读错误 + 非零退出码。
 - **根目录不再有 import 即执行的脚本**：`test_astock.py` / `test_data_quality.py` /
   `test.py` 移为 `scripts/probe_*.py`（加 `__main__` 守卫），`main.py`（上游美股 demo，
   模块层跑一次 NVDA 分析）删除，`run.py` / `run_single.py` 的全部模块层副作用

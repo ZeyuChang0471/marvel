@@ -145,3 +145,68 @@ class TestNoUpstreamDefaultsLeakIntoTheCli:
         assert "TauricResearch/TradingAgents" in src
         notice = (REPO_ROOT / "NOTICE").read_text(encoding="utf-8")
         assert "TauricResearch" in notice
+
+
+@pytest.mark.unit
+class TestCliUsesTheSharedDriverPath:
+    """CLI 必须走与 Web UI 相同的驱动路径。
+
+    ``cli/main.py::run_analysis`` 是一长串交互式提问（questionary / typer），
+    没法在测试里驱动，所以这里只能做**源码级**断言。这不是偷懒的文本匹配，
+    而是在行为测试不可行的前提下，钉住「不得再绕开共享驱动」这条不变量——
+    被钉住的三件事各自都是真实缺陷：
+
+    * 直接调 ``propagator.create_initial_state`` → 装不上 checkpointer
+      （``--checkpoint`` 是空操作）、记忆日志上下文不注入、断点 thread_id 不一致；
+    * 直接 ``graph.graph.stream`` → 与 Web UI 走两条不同的流；
+    * 直接 ``process_signal`` 收尾 → 状态不落盘（CLI 的分析不出现在 Web 历史里）、
+      决策不写记忆日志（反思回路对 CLI 完全失效）、断点不清理。
+    """
+
+    @staticmethod
+    def _source() -> str:
+        import inspect
+
+        from cli import main as cli_main
+
+        return inspect.getsource(cli_main.run_analysis)
+
+    def test_uses_the_shared_driver(self):
+        src = self._source()
+        assert "prepare_graph_run" in src, "CLI 没有走 prepare_graph_run"
+        assert "finalize_graph_run" in src, "CLI 没有走 finalize_graph_run"
+        assert "close_graph_run" in src, "CLI 没有释放 checkpointer"
+
+    def test_does_not_reach_into_the_propagator(self):
+        """不得自己拼初始状态与图参数。
+
+        `propagator.create_initial_state` / `get_graph_args` 绕开了
+        `prepare_graph_run`，于是 checkpointer 装不上（`--checkpoint` 变空操作）、
+        记忆日志上下文不注入、断点 thread_id 与落盘用的 ticker 不一致。
+        """
+        src = self._source()
+        assert "graph.propagator." not in src, (
+            "CLI 又直接操作 propagator 了——checkpoint 与记忆日志会再次失效"
+        )
+        assert "graph.process_signal(" not in src, (
+            "CLI 又自己收尾了——状态不会落盘、决策不会进记忆日志"
+        )
+
+    def test_drives_the_stream_with_the_prepared_state_and_args(self):
+        """CLI 自己驱动 stream 是**正确**的：它要按节点渲染进度，Web UI 也一样。
+
+        关键是它必须消费 `prepare_graph_run` 返回的 state/args，而不是自己拼一套。
+        """
+        src = self._source()
+        assert "graph.graph.stream(init_agent_state, **args)" in src, (
+            "CLI 应当用 prepare_graph_run 返回的 init_agent_state/args 驱动 stream"
+        )
+        assert "graph.prepare_graph_run(" in src, (
+            "stream 用的 state/args 必须来自 prepare_graph_run"
+        )
+
+    def test_reports_a_readable_error_instead_of_a_bare_traceback(self):
+        src = self._source()
+        assert "except Exception" in src, "分析失败会抛裸 traceback"
+        assert "typer.Exit" in src, "失败时应以非零码退出"
+
