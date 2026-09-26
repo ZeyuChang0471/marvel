@@ -644,16 +644,41 @@ def get_ticker():
             console.print(f"[red]Error: Invalid ticker — {exc}[/red]")
 
 
+def market_today_str() -> str:
+    """Today's date **in the market's timezone** (Asia/Shanghai).
+
+    The CLI used ``datetime.now()`` here, which is the host clock. For any host
+    behind Shanghai (a UTC runner or container, for instance) the market has
+    already rolled over while the host has not, and the consequences were both
+    wrong: the default offered was the market's *yesterday*, and typing the
+    market's actual current day was rejected as "in the future". The Web UI
+    already used the market-aware helpers; this makes the CLI agree with it.
+    """
+    from marvel.dataflows.trade_calendar import cn_today_str
+
+    return cn_today_str()
+
+
+def default_analysis_date() -> str:
+    """The date the CLI offers by default: the latest completed trading day."""
+    from marvel.dataflows.trade_calendar import latest_cn_trading_day
+
+    return latest_cn_trading_day()
+
+
+def is_future_analysis_date(date_str: str) -> bool:
+    """True when ``date_str`` is after the market's current date."""
+    return str(date_str)[:10] > market_today_str()
+
+
 def get_analysis_date():
     """Get the analysis date from user input."""
     while True:
-        date_str = typer.prompt(
-            "", default=datetime.datetime.now().strftime("%Y-%m-%d")
-        )
+        date_str = typer.prompt("", default=default_analysis_date())
         try:
-            # Validate date format and ensure it's not in the future
-            analysis_date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-            if analysis_date.date() > datetime.datetime.now().date():
+            # Validate the format, then reject a date the market has not reached.
+            datetime.datetime.strptime(date_str, "%Y-%m-%d")
+            if is_future_analysis_date(date_str):
                 console.print("[red]Error: Analysis date cannot be in the future[/red]")
                 continue
             return date_str

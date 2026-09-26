@@ -17,8 +17,17 @@ import pytest
 from marvel.dataflows import a_stock
 
 
-TODAY = datetime.now().strftime("%Y-%m-%d")
-PAST = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+# The data layer answers "is this historical?" with the **market** clock
+# (`_market_today()`, Asia/Shanghai), never the host clock — that is the whole
+# point of that helper. Deriving these dates from `datetime.now()` therefore made
+# the suite disagree with the code under test for six hours every day: on a UTC
+# runner between 16:00 and 24:00 UTC, Shanghai has already rolled over to
+# tomorrow, so a host-derived "today" was one day behind and
+# `_is_historical(TODAY)` came back True. CI was red for exactly that window and
+# green for the rest of the day. Derive them the way the code does.
+TODAY = a_stock._market_today().isoformat()
+PAST = (a_stock._market_today() - timedelta(days=90)).isoformat()
+FUTURE = (a_stock._market_today() + timedelta(days=5)).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +40,7 @@ PAST = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
     [
         (PAST, True),
         (TODAY, False),
-        ((datetime.now() + timedelta(days=5)).strftime("%Y-%m-%d"), False),
+        (FUTURE, False),
         ("", False),
         (None, False),
         ("not-a-date", False),          # 解析不了不能当成历史，否则误伤实时分析
@@ -501,7 +510,7 @@ def test_financial_report_drops_periods_after_the_analysis_date(monkeypatch):
 
 def test_financial_report_cuts_at_market_date_when_curr_date_missing(monkeypatch):
     """curr_date 缺失时要退到"市场当天"，而不是干脆不裁。"""
-    future = (datetime.now() + timedelta(days=400)).strftime("%Y-%m-%d")
+    future = (a_stock._market_today() + timedelta(days=400)).isoformat()
     _fake_sina_report(monkeypatch, ["2026-03-31", future])
 
     df = a_stock._get_financial_report_sina("600519", "利润表", "quarterly", None)
@@ -588,7 +597,7 @@ def test_stock_data_clamps_end_date_to_market_date(monkeypatch):
     """
     import pandas as pd
 
-    future = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+    future = (a_stock._market_today() + timedelta(days=30)).isoformat()
     frame = pd.DataFrame({
         "Date": pd.to_datetime([PAST, future]),
         "Open": [1.0, 2.0], "High": [1.0, 2.0], "Low": [1.0, 2.0],
