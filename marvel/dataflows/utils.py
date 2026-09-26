@@ -2,6 +2,8 @@ import os
 import re
 import json
 import logging
+import tempfile
+import contextlib
 import pandas as pd
 from datetime import date, timedelta, datetime
 from typing import Annotated
@@ -9,6 +11,38 @@ from typing import Annotated
 logger = logging.getLogger(__name__)
 
 SavePathType = Annotated[str, "File path to save data. If None, data is not saved."]
+
+
+def atomic_write_text(path: str, text: str, *, newline: str | None = None) -> None:
+    """Atomically write ``text`` to ``path`` (temp file in the same dir + replace).
+
+    The data layer's caches (name map JSON, K-line CSV, northbound history CSV,
+    yfinance OHLCV CSV) are all rewritten **in full**. With a plain
+    ``open(path, "w")`` a crash, kill or power loss halfway through leaves a
+    truncated file that still *parses*, so the next run silently reads a cache
+    that is missing an arbitrary suffix of its rows — and the northbound file
+    rewrites its accumulated history every time, so a partial write there
+    destroys every previously collected trading day.
+
+    ``os.replace`` is atomic within one filesystem: a reader sees either the old
+    complete file or the new complete file, never an intermediate state.
+    """
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=directory, prefix=os.path.basename(path) + ".", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        # Never leave a .tmp behind; the original file was not touched.
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
+        raise
 
 # Tickers can contain letters, digits, dot, dash, underscore, and caret
 # (for index symbols like ^GSPC). Anything else is rejected so the value

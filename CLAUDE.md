@@ -61,7 +61,12 @@ v0.2.5 起完全移除 akshare 依赖，所有数据通过直连 HTTP API 获取
 `fundsortlist` 和 `fundflow` 两个接口返回空（2026-05-19 确认）。v0.2.7 已替换为东财 push2 资金流 API。同时修复了 `RPT_ORGANIZATION_BUSSINESS`（改用席位筛选机构）和东财全球资讯 `req_trace` 参数。
 
 ### 东财接口防封限流（v0.2.11 新增，移植自 a-stock-data v3.2）
-`a_stock.py` 里所有指向 `eastmoney.com` 的请求（push2 / push2his / datacenter-web / search-api / np-weblist 共 7 个调用点）统一走节流入口 `_em_get()`：模块级时间戳串行限流（默认间隔 `EM_MIN_INTERVAL=1.0s`，可用同名环境变量覆盖）+ 0.1~0.5s 随机抖动 + 复用 `requests.Session`（Keep-Alive）+ 默认 UA。多 Agent 跑批量分析不再触发东财临时封 IP。**仅东财限流**——mootdx(TCP) / 腾讯 / 新浪 / 同花顺 / 财联社 / 百度 等非东财源不受影响。批量场景可设 `EM_MIN_INTERVAL=1.5~2` 进一步降速。新增东财端点时务必走 `_em_get` 而非裸 `requests.get`。
+`a_stock.py` 里所有指向 `eastmoney.com` 的请求（push2 / push2his / datacenter-web / search-api / np-weblist 共 7 个调用点）统一走节流入口 `_em_get()`：模块级时间戳串行限流（默认间隔 `EM_MIN_INTERVAL=1.0s`，可用同名环境变量覆盖）+ 0.1~0.5s 随机抖动 + 复用 `requests.Session`（Keep-Alive）+ 默认 UA + 429/5xx/超时按 1/2/4s 退避重试 3 次（`EM_MAX_RETRIES` / `EM_RETRY_BASE_S` 可调；全部失败**抛出**，不返回失败响应）。多 Agent 跑批量分析不再触发东财临时封 IP。**仅东财限流**——mootdx(TCP) / 腾讯 / 新浪 / 同花顺 / 财联社 / 百度 等非东财源不受影响。批量场景可设 `EM_MIN_INTERVAL=1.5~2` 进一步降速。新增东财端点时务必走 `_em_get` 而非裸 `requests.get`；调用方不得把空 `data` 当成「没有数据」，接口失败必须走 except 分支明说（见 `tests/test_data_layer_hardening.py`）。
+
+### 数据层的三条纪律（`tests/test_data_layer_hardening.py`）
+1. **缓存写入必须原子**：用 `dataflows/utils.py:atomic_write_text`（同目录临时文件 + `os.replace`），不要 `open(path, "w")` 或 `to_csv(cache_file, ...)` 就地覆盖——北向历史那份每次重写全部历史，半截文件会丢掉所有历史交易日。
+2. **mootdx 走单条 TCP，必须串行**：`_mootdx_call` 已用 `_MOOTDX_LOCK`（RLock）罩住「选服务器 + 取数」；新增直接调用 `_get_mootdx_client()` 的代码要自己取同一把锁。
+3. **数据源窗口不足时要说出来**：mootdx 单次只有最近 `_MOOTDX_BAR_LIMIT`（800）根日线，`get_stock_data` 会在表头写明被截断的区间；同类工具照此办理，不要用 `# Total records: N` 蒙过去。K 线缓存的复用判据是「这根 K 线能不能算最终值」（盘中写的半截日线收盘后必须重取），见 `_ohlcv_cache_is_final`。
 
 ### 模型兼容性
 deepseek-v4-flash 等模型在 tool call 时可能返回中文股票名而非 6 位代码。`safe_ticker_component` 已加兜底自动转码，但不同模型表现仍有差异。

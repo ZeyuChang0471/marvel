@@ -8,7 +8,7 @@ from stockstats import wrap
 from typing import Annotated
 import os
 from .config import get_config
-from .utils import safe_ticker_component
+from .utils import atomic_write_text, safe_ticker_component
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
             auto_adjust=True,
         ))
         data = data.reset_index()
-        data.to_csv(data_file, index=False, encoding="utf-8")
+        atomic_write_text(data_file, data.to_csv(index=False))
 
     data = _clean_dataframe(data)
 

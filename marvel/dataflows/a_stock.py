@@ -15,7 +15,7 @@ Data sources:
 from __future__ import annotations
 
 from typing import Annotated
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as _dtime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
 import contextlib
 import json as _json
@@ -33,7 +33,7 @@ import urllib.request
 import pandas as pd
 import requests as _requests
 
-from .utils import safe_ticker_component
+from .utils import atomic_write_text, safe_ticker_component
 
 logger = logging.getLogger(__name__)
 
@@ -182,8 +182,9 @@ def _save_name_map_to_disk(n2c: dict, c2n: dict) -> None:
             "name_to_code": n2c,
             "code_to_name": c2n,
         }
-        with open(_name_map_cache_path(), "w", encoding="utf-8") as f:
-            _json.dump(payload, f, ensure_ascii=False)
+        _atomic_write_text(
+            _name_map_cache_path(), _json.dumps(payload, ensure_ascii=False)
+        )
         logger.info("名称映射已写入磁盘缓存：%d 条", len(n2c))
     except Exception as exc:
         logger.debug("写入名称映射缓存失败（不影响本次结果）：%s", exc)
@@ -318,11 +319,27 @@ def _snapshot_notice(curr_date: str, what: str) -> str:
     )
 
 
+def _atomic_write_text(path: str, text: str, *, newline: str | None = None) -> None:
+    """本地别名——实现放在 `dataflows/utils.py`，供整个数据层共用。"""
+    return atomic_write_text(path, text, newline=newline)
+
+
 # ---------------------------------------------------------------------------
 # mootdx client (singleton)
 # ---------------------------------------------------------------------------
 
 _mootdx_client = None
+
+# mootdx/通达信走**单条 TCP 连接**，协议是有状态的请求-响应，不是线程安全的：
+# 两个线程同时用同一个 client 会让响应错位（拿到的可能是另一个请求的 K 线）。
+# 而 Web UI 里 tracker 是 per-session 的，两个浏览器会话可以各跑一轮分析，名称
+# 映射解析（`_build_name_code_map`）也走同一条连接。用 RLock 而非 Lock：
+# `_mootdx_call` 持锁期间会调用 `reset_mootdx_client()`，后者要取同一把锁。
+_MOOTDX_LOCK = threading.RLock()
+
+# mootdx（通达信协议）单次 bars 请求能取回的日线根数上限，约 3 年交易日。
+# 请求更早的 start_date 时必须说清楚被截断了，不能只写 "# Total records: N"。
+_MOOTDX_BAR_LIMIT = 800
 
 # 实测可用的通达信备选服务器（按延迟排序，2026-06 验证）。用于规避 mootdx
 # 0.11.x 全新安装时 BESTIP.HQ 为空串导致的 `ValueError: not enough values to unpack`。
@@ -416,8 +433,9 @@ def reset_mootdx_client() -> None:
     永远不会重选。数据调用发现 mootdx 出错时调它，下一次就能换一台（#90）。
     """
     global _mootdx_client, _mootdx_unavailable_until
-    _mootdx_client = None
-    _mootdx_unavailable_until = 0.0
+    with _MOOTDX_LOCK:
+        _mootdx_client = None
+        _mootdx_unavailable_until = 0.0
 
 
 @contextlib.contextmanager
@@ -552,13 +570,17 @@ def _mootdx_call(method: str, **kwargs):
     选中的服务器随时可能挂掉；不弃用的话单例会一直指着它，之后每次取数都失败降级
     且永不重选（#90 的「反复降级」）。取 client 本身失败时不清缓存——那条路径已经
     在 `_get_mootdx_client` 里做了负缓存，清掉等于取消快速失败。
+
+    整段（选服务器 + 取数）都在 `_MOOTDX_LOCK` 内：单条 TCP 连接不是线程安全的，
+    选服务器时还会改写 mootdx 的持久化配置。
     """
-    client = _get_mootdx_client()
-    try:
-        return getattr(client, method)(**kwargs)
-    except Exception:
-        reset_mootdx_client()
-        raise
+    with _MOOTDX_LOCK:
+        client = _get_mootdx_client()
+        try:
+            return getattr(client, method)(**kwargs)
+        except Exception:
+            reset_mootdx_client()
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -668,24 +690,60 @@ _em_last_call = [0.0]  # 模块级上次东财请求时间戳
 # README / CLAUDE.md 恰恰承诺了「串行限流」。这把锁覆盖 sleep + 请求整段。
 _EM_LOCK = threading.Lock()
 
+# 429/5xx/网络抖动重试。东财风控命中时返回 429，偶发 502/503 也很常见；原先只发
+# 一次请求，调用方拿到一个 429 响应体后 `.json()` 解析失败（或拿到空 data），最终在
+# 报告里显示成「未上龙虎榜」/「行业数据获取为空」——把**接口失败**冒充成**真的没数据**。
+# 3 次重试（共 4 次尝试）+ 指数退避 1/2/4s，全部失败最后抛出，让调用方能区分两者。
+_EM_MAX_RETRIES = int(os.environ.get("EM_MAX_RETRIES", "3"))
+_EM_RETRY_BASE_S = float(os.environ.get("EM_RETRY_BASE_S", "1.0"))
+_EM_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+
 
 def _em_get(url, params=None, headers=None, timeout=15, **kwargs):
-    """东财统一请求入口：自动节流 + 复用 session + 默认 UA。
+    """东财统一请求入口：自动节流 + 复用 session + 默认 UA + 退避重试。
 
     所有 eastmoney.com 接口都应通过它请求，避免多 Agent 高频拉数据被封 IP。
     串行限流：与上次东财请求间隔 < EM_MIN_INTERVAL 时 sleep 补足 + 0.1~0.5s 随机抖动。
     传入的 headers 会覆盖 session 默认 UA（用于保留各端点自己的 Referer/Origin）。
+
+    429 / 5xx / 超时 / 连接错误会重试 `_EM_MAX_RETRIES` 次（指数退避）；重试仍失败则
+    **抛出**，而不是把失败响应交给调用方当空数据用。整段重试都在 `_EM_LOCK` 内，与
+    节流共用同一把锁——这里本来就是「串行访问东财」的意思。
     """
+    last_exc: Exception | None = None
     with _EM_LOCK:
-        wait = _EM_MIN_INTERVAL - (time.time() - _em_last_call[0])
-        if wait > 0:
-            time.sleep(wait + random.uniform(0.1, 0.5))
-        try:
-            return _EM_SESSION.get(
-                url, params=params, headers=headers, timeout=timeout, **kwargs
-            )
-        finally:
-            _em_last_call[0] = time.time()
+        for attempt in range(_EM_MAX_RETRIES + 1):
+            wait = _EM_MIN_INTERVAL - (time.time() - _em_last_call[0])
+            if wait > 0:
+                time.sleep(wait + random.uniform(0.1, 0.5))
+            try:
+                response = _EM_SESSION.get(
+                    url, params=params, headers=headers, timeout=timeout, **kwargs
+                )
+            except (_requests.RequestException, OSError) as exc:
+                last_exc = exc
+            else:
+                if response.status_code not in _EM_RETRY_STATUS:
+                    return response
+                last_exc = _requests.HTTPError(
+                    f"东财返回 {response.status_code} for {url}", response=response
+                )
+            finally:
+                _em_last_call[0] = time.time()
+
+            if attempt < _EM_MAX_RETRIES:
+                backoff = _EM_RETRY_BASE_S * (2**attempt)
+                logger.warning(
+                    "东财请求失败（第 %d/%d 次）：%s；%.1fs 后重试",
+                    attempt + 1,
+                    _EM_MAX_RETRIES + 1,
+                    last_exc,
+                    backoff,
+                )
+                time.sleep(backoff)
+
+    logger.error("东财请求连续 %d 次失败：%s", _EM_MAX_RETRIES + 1, last_exc)
+    raise last_exc if last_exc is not None else RuntimeError(f"东财请求失败: {url}")
 
 
 def _eastmoney_datacenter(
@@ -874,6 +932,48 @@ def _no_data_reason(curr_date: str) -> str:
         return ""
 
 
+def _ohlcv_cache_is_final(cache_file: str, last_bar_date) -> bool:
+    """Is this same-day K-line cache safe to reuse as-is?
+
+    旧判据只有一条：缓存文件的 mtime 是**今天**（而且还是主机本地时区的"今天"）。
+    盘中 10:30 跑过一次分析时写下的是当天那根**没走完**的 K 线；同一天晚上再跑，
+    缓存依旧命中，于是那根半截 K 线被当成当日最终收盘价喂给模型——报告里看不出
+    任何异常，均线/涨跌幅却全偏。
+
+    现在的规则：
+    - 不是今天写的 → 重取；
+    - 缓存里还没有今天那根 → 只有"今天已收盘"时重取才有意义（能补上今天），
+      盘前/盘中/非交易日缓存已经是最新的完整数据，直接复用；
+    - 缓存里已经有今天那根 → 只有**收盘之后**写下的才可能是完整的最终日线。
+    """
+    today = _market_today()
+    mtime = datetime.fromtimestamp(os.path.getmtime(cache_file), tz=_MARKET_TZ)
+    if mtime.date() != today:
+        return False
+
+    try:
+        from .trade_calendar import cn_market_phase
+
+        phase = cn_market_phase()
+    except Exception:  # noqa: BLE001 — 日历不可用时退化成"按钟点判断"
+        phase = "post_close" if datetime.now(_MARKET_TZ).hour >= 15 else "in_session"
+
+    # `last_bar_date` 来自 `DataFrame["Date"].max()`，是 pd.Timestamp，直接和 date
+    # 比较会抛 TypeError；统一降到 date 再比。
+    last_bar_day = None
+    if last_bar_date is not None:
+        stamp = pd.to_datetime(last_bar_date, errors="coerce")
+        if not pd.isna(stamp):
+            last_bar_day = stamp.date()
+
+    has_today_bar = last_bar_day is not None and last_bar_day >= today
+    if not has_today_bar:
+        return phase != "post_close"
+
+    close_dt = datetime.combine(today, _dtime(15, 0), tzinfo=_MARKET_TZ)
+    return mtime >= close_dt
+
+
 def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
     """Fetch OHLCV via mootdx, cache to CSV, filter by curr_date.
 
@@ -892,21 +992,30 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
     cache_file = os.path.join(cache_dir, f"{code}-astock-daily.csv")
 
     if os.path.exists(cache_file):
-        mtime = datetime.fromtimestamp(os.path.getmtime(cache_file))
-        if mtime.date() == datetime.now().date():
-            data = pd.read_csv(cache_file, on_bad_lines="skip", encoding="utf-8")
-            data = _normalize_ohlcv_dates(data)
+        cached = None
+        try:
+            cached = _normalize_ohlcv_dates(
+                pd.read_csv(cache_file, on_bad_lines="skip", encoding="utf-8")
+            )
+        except Exception as exc:  # 缓存坏掉只是多取一次，不能影响主流程
+            logger.warning("K 线缓存读取失败，将重新获取：%s", exc)
+        if (
+            cached is not None
+            and not cached.empty
+            and "Date" in cached.columns
+            and _ohlcv_cache_is_final(cache_file, cached["Date"].max())
+        ):
             data, supplemented = _supplement_stale_ohlcv_with_sina(
-                code, data, curr_date, start_date=None
+                code, cached, curr_date, start_date=None
             )
             if supplemented:
-                data.to_csv(cache_file, index=False, encoding="utf-8")
+                _atomic_write_text(cache_file, data.to_csv(index=False))
             cutoff = pd.to_datetime(curr_date)
             return data[data["Date"] <= cutoff]
 
-    # Fetch from mootdx — 800 daily bars (~3 years of trading days)
+    # Fetch from mootdx — `_MOOTDX_BAR_LIMIT` daily bars (~3 years of trading days)
     try:
-        df = _mootdx_call("bars", symbol=code, category=4, offset=800)
+        df = _mootdx_call("bars", symbol=code, category=4, offset=_MOOTDX_BAR_LIMIT)
 
         if df is None or df.empty:
             raise ValueError(f"No OHLCV data from mootdx for {code}")
@@ -926,6 +1035,19 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
         df = df.rename(columns=rename_map)
         df = df[["Date", "Open", "High", "Low", "Close", "Volume"]]
         df = _normalize_ohlcv_dates(df)
+        # 指标路径没法在数值里夹带说明，所以至少留下日志：分析日早于数据源窗口时，
+        # 这一路算出来的长周期指标其实是在"没有那段行情"的前提下算的。
+        if len(df) >= _MOOTDX_BAR_LIMIT:
+            earliest = df["Date"].min()
+            cutoff_dt = pd.to_datetime(curr_date, errors="coerce")
+            if not pd.isna(cutoff_dt) and earliest > cutoff_dt:
+                logger.warning(
+                    "OHLCV 窗口不足：%s 只取到最近 %d 根（最早 %s），"
+                    "早于该日的指标（长周期均线等）不可靠",
+                    code,
+                    _MOOTDX_BAR_LIMIT,
+                    earliest.date(),
+                )
     except Exception as e:
         logger.warning("mootdx OHLCV failed for %s: %s, trying sina HTTP fallback", code, e)
         # Fallback: Sina direct HTTP API
@@ -941,7 +1063,7 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
     df, _ = _supplement_stale_ohlcv_with_sina(code, df, curr_date, start_date=None)
 
     # Cache to disk
-    df.to_csv(cache_file, index=False, encoding="utf-8")
+    _atomic_write_text(cache_file, df.to_csv(index=False))
 
     # Filter by curr_date to prevent look-ahead bias
     cutoff = pd.to_datetime(curr_date)
@@ -965,11 +1087,16 @@ def get_stock_data(
     code = _normalize_ticker(symbol)
 
     data_source = "mootdx (TCP)"
+    window_is_capped = False
     try:
-        df = _mootdx_call("bars", symbol=code, category=4, offset=800)
+        df = _mootdx_call("bars", symbol=code, category=4, offset=_MOOTDX_BAR_LIMIT)
 
         if df is None or df.empty:
             raise ValueError(f"No data from mootdx for {code}")
+
+        # mootdx 一次只给最近 800 根（约 3 年）。拿到满额就说明"更早的还有，只是没取"，
+        # 用它来判断下面的请求区间是否被静默截断。
+        window_is_capped = len(df) >= _MOOTDX_BAR_LIMIT
 
         # Drop duplicate datetime column + extra columns before reset_index
         df = df.drop(
@@ -1040,6 +1167,21 @@ def get_stock_data(
             + _no_data_reason(end_date)
         )
 
+    # 请求区间早于数据源窗口时，前面的 K 线**根本没被取回来**（mootdx 单次上限 800 根，
+    # 且它一次只给"最近"的那些）。原先只在 header 里写 "# Total records: N"，等于
+    # 把"我只取了近三年"说成"这只票三年以前没有数据"——模型据此算长周期均线、
+    # 判断历史位置，报告里完全看不出缺了一段。
+    truncation_note = ""
+    if window_is_capped:
+        earliest = df["Date"].min()
+        if earliest > start_dt:
+            truncation_note = (
+                f"# ⚠️ 请求区间从 {start_date} 开始，但该数据源单次只提供最近 "
+                f"{_MOOTDX_BAR_LIMIT} 根日线（最早 {earliest:%Y-%m-%d}）。"
+                f"{start_date} ~ {earliest:%Y-%m-%d} 之间**不是没有行情，而是没有取回来**，"
+                f"不得据此判断该区间无数据或计算跨区间的指标。\n"
+            )
+
     for col in ["Open", "High", "Low", "Close"]:
         if col in df.columns:
             df[col] = df[col].round(2)
@@ -1051,6 +1193,7 @@ def get_stock_data(
 
     header = f"# Stock data for {code} (A-stock) from {start_date} to {end_date}\n"
     header += clamped_note
+    header += truncation_note
     header += f"# Total records: {len(df)}\n"
     header += f"# Data source: {data_source}\n"
     header += (
@@ -2138,8 +2281,13 @@ def _northbound_cache_path() -> str:
 
 
 def _save_northbound_snapshot(date_str: str, hgt: float, sgt: float) -> None:
-    """Append today's northbound close to local CSV cache (dedup by date)."""
+    """Append today's northbound close to local CSV cache (dedup by date).
+
+    整份重写（去重后按日期排序），因此必须原子落盘：这份缓存是在**累积历史**，
+    半截文件会把之前攒下的所有交易日一起丢掉，而不是只丢今天这一行。
+    """
     import csv
+    import io
 
     path = _northbound_cache_path()
     existing: dict[str, tuple[str, str]] = {}
@@ -2152,11 +2300,12 @@ def _save_northbound_snapshot(date_str: str, hgt: float, sgt: float) -> None:
                     existing[row[0]] = (row[1], row[2])
     existing[date_str] = (f"{hgt:.2f}", f"{sgt:.2f}")
     sorted_dates = sorted(existing.keys())
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["date", "hgt", "sgt"])
-        for d in sorted_dates:
-            writer.writerow([d, existing[d][0], existing[d][1]])
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["date", "hgt", "sgt"])
+    for d in sorted_dates:
+        writer.writerow([d, existing[d][0], existing[d][1]])
+    _atomic_write_text(path, buffer.getvalue(), newline="")
 
 
 def _load_northbound_history(n: int = 20) -> list[tuple[str, float, float]]:
@@ -2777,6 +2926,36 @@ def get_lockup_expiry(
 # 17. Industry Comparison (行业横向对比)
 # ---------------------------------------------------------------------------
 
+def _to_float(value) -> float | None:
+    """Parse a push2 numeric field, or None when it is not a number.
+
+    东财在停牌/无数据的行里把 ``f3`` 之类的字段写成 ``"-"``（字符串），直接
+    ``float()`` 会抛，直接当 0 又会把它排进榜单中间冒充"不涨不跌"。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if math.isfinite(float(value)) else None
+    text = str(value).strip().rstrip("%")
+    if not text or text in {"-", "--", "null", "None"}:
+        return None
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _industry_rank_row(rank: int, row: dict) -> str:
+    return (
+        f"  {rank}. {row['name']} "
+        f"| {row['change_pct']:+.2f}% "
+        f"| {row['up']} "
+        f"| {row['down']} "
+        f"| {row['leader']}"
+    )
+
+
 def get_industry_comparison(
     ticker: str,
     trade_date: str,
@@ -2818,28 +2997,48 @@ def get_industry_comparison(
         items = d.get("data", {}).get("diff", [])
 
         if items:
-            lines.append(
-                f"\n## 全行业表现 (东财 {len(items)} 个行业)"
-            )
-            lines.append(
-                "排名 | 行业 | 涨跌幅 | 上涨 | 下跌 | 领涨股"
-            )
-            for i, item in enumerate(items):
-                name = item.get("f14", "")
-                change_pct = item.get("f3", 0)
-                up_count = item.get("f104", 0)
-                down_count = item.get("f105", 0)
-                leader = item.get("f140", "")
-                lines.append(
-                    f"  {i+1}. {name} "
-                    f"| {change_pct}% "
-                    f"| {up_count} "
-                    f"| {down_count} "
-                    f"| {leader}"
+            # 东财按 po=1 返回的是**降序**列表，但"top/bottom N"不能靠切片实现：
+            # 原实现打到 2*top_n 就 break，拿到的其实只有涨幅前 40 个行业，跌幅榜
+            # 一个都没有，而标题写着 "showing top/bottom 20"（pz=100 本来就够取回
+            # 全部约 86 个行业）。这里本地解析 + 排序，头尾各取 N，标题与内容一致。
+            parsed: list[dict] = []
+            for item in items:
+                change_pct = _to_float(item.get("f3"))
+                if change_pct is None:
+                    # 停牌/无成交的行业没有涨跌幅，不该混进任何一张榜单。
+                    continue
+                parsed.append(
+                    {
+                        "name": item.get("f14", ""),
+                        "change_pct": change_pct,
+                        "up": item.get("f104", 0),
+                        "down": item.get("f105", 0),
+                        "leader": item.get("f140", ""),
+                    }
                 )
-                if i >= top_n * 2 - 1:
-                    lines.append(f"  ... (showing top/bottom {top_n})")
-                    break
+            parsed.sort(key=lambda row: row["change_pct"], reverse=True)
+
+            if parsed:
+                n = max(1, min(int(top_n), len(parsed)))
+                top = parsed[:n]
+                # 只有在自己不重叠时才给"跌幅榜"，避免行业数少于 2N 时同一行出现两次。
+                bottom = parsed[len(parsed) - n :] if len(parsed) - n >= n else []
+
+                lines.append(
+                    f"\n## 行业涨跌幅榜 (东财 {len(parsed)} 个行业，按涨跌幅排序)"
+                )
+                lines.append("排名 | 行业 | 涨跌幅 | 上涨 | 下跌 | 领涨股")
+                for rank, row in enumerate(top, start=1):
+                    lines.append(_industry_rank_row(rank, row))
+                if bottom:
+                    lines.append(f"  ... (共 {len(parsed)} 个行业)")
+                    for offset, row in enumerate(bottom):
+                        rank = len(parsed) - len(bottom) + offset + 1
+                        lines.append(_industry_rank_row(rank, row))
+                if not bottom:
+                    lines.append(f"  (仅 {len(parsed)} 个行业，未另列跌幅榜)")
+            else:
+                lines.append("行业数据获取成功，但没有一个行业带有效涨跌幅。")
         else:
             lines.append("行业数据获取为空。")
     except Exception as e:
