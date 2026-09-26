@@ -219,16 +219,18 @@ def _build_name_code_map() -> tuple[dict[str, str], dict[str, str]]:
             for _, row in stocks.iterrows():
                 code = str(row["code"]).strip()
                 name = str(row["name"]).strip()
-                if not _re.match(r"^[036]\d{5}$", code):
+                if not _re.match(r"^[034689]\d{5}$", code):
                     continue
                 clean_name = name.replace(" ", "").replace("　", "")
                 n2c[clean_name] = code
                 c2n[code] = clean_name
     except Exception as e:
-        # 网络抖动/通达信不可达时给出明确提示，而非冒泡成风马牛不相及的报错（#46/#66）
+        # 网络抖动/通达信不可达时给出明确提示，而非冒泡成风马牛不相及的报错（#46/#66）。
+        # `str(e)` 自己就以「。」结尾，直接拼接会出现「。。」——先去掉尾部的标点。
+        detail = str(e).strip().rstrip("。.")
         raise ValueError(
-            "无法通过 mootdx 解析股票名称（通达信服务暂时不可达）：%s。"
-            "请稍后重试，或直接输入 6 位股票代码。" % e
+            f"无法通过 mootdx 解析股票名称（通达信服务暂时不可达）：{detail} "
+            "接下来会尝试腾讯的在线名称查询。"
         ) from e
 
     _name_to_code = n2c
@@ -238,12 +240,71 @@ def _build_name_code_map() -> tuple[dict[str, str], dict[str, str]]:
     return _name_to_code, _code_to_name
 
 
+def _fetch_name_candidates(query: str) -> list[tuple[str, str]]:
+    """Name → [(name, code)] over HTTP (Tencent smartbox). No mootdx needed.
+
+    ``GET https://smartbox.gtimg.cn/s3/?q=<name>&t=all`` answers with a JS string
+    assignment whose payload is a ``^``-separated list of ``market~code~name~…``
+    records, with the Chinese characters ``\\uXXXX``-escaped::
+
+        v_hint="sh~600487~\\u4ea8\\u901a\\u5149\\u7535~htgd~GP-A"
+
+    Hong Kong / US rows come back on the same endpoint, so the market prefix is
+    checked rather than trusted.
+    """
+    response = _requests.get(
+        _SMARTBOX_URL,
+        params={"q": query, "t": "all"},
+        headers={"User-Agent": _UA, "Referer": "https://finance.qq.com/"},
+        timeout=10,
+    )
+    response.raise_for_status()
+
+    text = response.text.strip()
+    marker = 'v_hint="'
+    start = text.find(marker)
+    if start == -1:
+        return []
+    start += len(marker)
+    end = text.find('"', start)
+    if end == -1:
+        return []
+
+    payload = text[start:end]
+    try:
+        # The payload is a JS string literal, so its \uXXXX escapes decode as JSON.
+        payload = _json.loads(f'"{payload}"')
+    except ValueError:
+        logger.debug("smartbox 返回无法解码：%r", payload[:80])
+        return []
+
+    candidates: list[tuple[str, str]] = []
+    for entry in payload.split("^"):
+        parts = entry.split("~")
+        if len(parts) < 3:
+            continue
+        market, code, name = parts[0].strip().lower(), parts[1].strip(), parts[2]
+        if market not in ("sh", "sz", "bj") or not _re.match(r"^\d{6}$", code):
+            continue
+        clean_name = name.replace(" ", "").replace("　", "").strip()
+        if clean_name:
+            candidates.append((clean_name, code))
+    return candidates
+
+
 def resolve_ticker(user_input: str) -> str:
     """Resolve user input (code or Chinese name) to a 6-digit A-stock code.
 
     Accepts: '600379', 'SH600379', '600379.SH', '宝光股份'
     Returns: '600379'
     Raises: ValueError if not resolvable.
+
+    A 6-digit code needs no lookup at all, so it keeps working with no network.
+    A Chinese name is resolved from the mootdx full-market map when that is
+    reachable, and otherwise **over HTTP** (Tencent smartbox) — the mootdx map
+    needs TCP 7709, which corporate networks, proxies and firewalls routinely
+    block, and without the HTTP path a blocked port made the whole app unusable
+    for anyone who types a name instead of a code.
     """
     s = user_input.strip()
     if not s:
@@ -255,17 +316,55 @@ def resolve_ticker(user_input: str) -> str:
         return _normalize_ticker(s)
 
     clean = s.replace(" ", "").replace("　", "")
-    n2c, _ = _build_name_code_map()
 
-    if clean in n2c:
-        return n2c[clean]
+    # 1) The full-market map (needs mootdx, but supports substring matching).
+    map_error: str | None = None
+    n2c: dict[str, str] = {}
+    try:
+        n2c, _ = _build_name_code_map()
+    except ValueError as exc:
+        map_error = str(exc)
+        logger.info("名称映射不可用（%s），改用在线查询：%s", type(exc).__name__, clean)
 
-    matches = {name: code for name, code in n2c.items() if clean in name}
-    if len(matches) == 1:
-        return next(iter(matches.values()))
-    if len(matches) > 1:
-        examples = ", ".join(f"{n}({c})" for n, c in list(matches.items())[:5])
-        raise ValueError(f"'{s}' 匹配到多只股票: {examples}，请输入完整名称或代码")
+    if n2c:
+        if clean in n2c:
+            return n2c[clean]
+
+        matches = {name: code for name, code in n2c.items() if clean in name}
+        if len(matches) == 1:
+            return next(iter(matches.values()))
+        if len(matches) > 1:
+            examples = ", ".join(f"{n}({c})" for n, c in list(matches.items())[:5])
+            raise ValueError(f"'{s}' 匹配到多只股票: {examples}，请输入完整名称或代码")
+
+    # 2) Online lookup — the path that works when TCP 7709 is blocked.
+    candidates: list[tuple[str, str]] = []
+    lookup_error: str | None = None
+    try:
+        candidates = _fetch_name_candidates(clean)
+    except Exception as exc:  # noqa: BLE001 — fall through to the message below
+        lookup_error = f"{type(exc).__name__}: {exc}"
+        logger.warning("在线名称查询失败：%s", lookup_error)
+
+    if candidates:
+        exact = [code for name, code in candidates if name == clean]
+        if len(exact) == 1:
+            return exact[0]
+        if len(candidates) == 1:
+            return candidates[0][1]
+        if len(set(code for _, code in candidates)) > 1:
+            examples = ", ".join(f"{n}({c})" for n, c in candidates[:5])
+            raise ValueError(f"'{s}' 匹配到多只股票: {examples}，请输入完整名称或代码")
+        return candidates[0][1]
+
+    # 3) Nothing worked. Say which two things failed rather than blaming one.
+    if map_error:
+        detail = map_error.strip().rstrip("。.")
+        extra = f"在线名称查询也失败了（{lookup_error}）。" if lookup_error else ""
+        raise ValueError(
+            f"无法解析股票名称 '{s}'：{detail} {extra}"
+            f"请直接输入 6 位股票代码（如 '600487'）后重试。"
+        )
 
     # LLM 有时会把行业/概念名（如 '游戏'、'白酒'）当 ticker 传进来（#76）。
     # 报错必须写明原因和正确用法，让模型能在下一次工具调用中自我纠正。
@@ -673,6 +772,8 @@ def get_stock_name(code: str) -> str | None:
 
 _DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+#: Tencent's search box — the name→code path that does not need TCP 7709.
+_SMARTBOX_URL = "https://smartbox.gtimg.cn/s3/"
 
 
 # ---------------------------------------------------------------------------
