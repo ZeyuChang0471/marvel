@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
-import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
 from marvel.default_config import DEFAULT_CONFIG
+
+from marvel.dataflows.utils import bounded_mkstemp
 
 
 logger = logging.getLogger(__name__)
@@ -108,18 +110,26 @@ def _save_incomplete_index(entries: list[dict[str, Any]]) -> None:
     for attempt in range(3):
         tmp: Path | None = None
         try:
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=parent,
-                prefix=f"{_INCOMPLETE_TASKS_FILE.stem}.",
-                suffix=".tmp",
-                delete=False,
-            ) as f:
+            # `bounded_mkstemp`, not `tempfile.NamedTemporaryFile`: on Windows the
+            # stdlib loops up to TMP_MAX (10000) times on PermissionError whenever the
+            # directory merely *looks* writable, so one refusal from a security
+            # product became minutes of single-core spinning. This function is called
+            # from `run_analysis_in_thread`, i.e. it could stall the UI thread before
+            # the analysis even started (measured 2026-10-08).
+            fd, tmp_name = bounded_mkstemp(
+                str(parent), prefix=f"{_INCOMPLETE_TASKS_FILE.stem}."
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(payload)
-                tmp = Path(f.name)
+            tmp = Path(tmp_name)
             tmp.replace(_INCOMPLETE_TASKS_FILE)
             return
+        except PermissionError:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
+            if attempt < 2:
+                # 锁通常是瞬时的，短暂等待后重试
+                time.sleep(0.15 * (attempt + 1))
         except PermissionError:
             if tmp is not None:
                 tmp.unlink(missing_ok=True)

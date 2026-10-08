@@ -1,3 +1,4 @@
+import errno
 import os
 import re
 import json
@@ -13,6 +14,42 @@ logger = logging.getLogger(__name__)
 SavePathType = Annotated[str, "File path to save data. If None, data is not saved."]
 
 
+def bounded_mkstemp(directory: str, prefix: str, suffix: str = ".tmp", attempts: int = 3):
+    """A **bounded** drop-in for the create step of ``tempfile.mkstemp``.
+
+    Why this exists — a freeze, not a nicety. On Windows, ``tempfile._mkstemp_inner``
+    catches ``PermissionError`` and, when the *directory* looks writable, simply
+    ``continue``s with another random name, up to ``TMP_MAX`` (10000) times. When the
+    refusal comes from something that is not the ACL — a security product's file
+    protection, a filter driver, a sandbox that only allows certain paths — then
+    **every** attempt fails the same way and one write turns into minutes of
+    single-core spinning.
+
+    Measured 2026-10-08: a directory where ``os.open(..., O_CREAT|O_EXCL)`` returned
+    ``PermissionError`` in 0.000s left ``NamedTemporaryFile`` stuck for over 30
+    seconds; in the running app that happened inside
+    ``record_incomplete_task()`` — which runs *before* the analysis thread is
+    started — so the UI sat on "分析进行中" at 100% CPU forever with 0 LLM calls.
+
+    So: try a few distinct names, retry **only** on genuine collisions
+    (``FileExistsError``), and let a permission problem propagate immediately for the
+    caller to degrade. Returns ``(fd, path)``.
+    """
+    for _ in range(max(1, attempts)):
+        candidate = os.path.join(directory, f"{prefix}{os.urandom(6).hex()}{suffix}")
+        try:
+            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+        except FileExistsError:
+            continue          # a real collision: another name is worth trying
+        except PermissionError:
+            raise             # never loop on this — the reason will not change
+        return fd, candidate
+
+    raise FileExistsError(
+        errno.EEXIST, "no usable temporary file name found", directory
+    )
+
+
 def atomic_write_text(path: str, text: str, *, newline: str | None = None) -> None:
     """Atomically write ``text`` to ``path`` (temp file in the same dir + replace).
 
@@ -26,12 +63,30 @@ def atomic_write_text(path: str, text: str, *, newline: str | None = None) -> No
 
     ``os.replace`` is atomic within one filesystem: a reader sees either the old
     complete file or the new complete file, never an intermediate state.
+
+    When the directory refuses **new** files but still allows writing an existing
+    one (exactly the shape a security product's file protection has), this degrades
+    to a direct write and says so, rather than hanging or losing the data: atomicity
+    is worth a lot, but not more than the write itself.
     """
     directory = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(directory, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        dir=directory, prefix=os.path.basename(path) + ".", suffix=".tmp"
-    )
+
+    try:
+        fd, tmp_path = bounded_mkstemp(
+            directory, prefix=os.path.basename(path) + ".", suffix=".tmp"
+        )
+    except PermissionError:
+        logger.warning(
+            "%s: 目录拒绝创建临时文件（安全软件/沙箱？），降级为直接覆写（非原子）",
+            path,
+        )
+        with open(path, "w", encoding="utf-8", newline=newline) as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        return
+
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as handle:
             handle.write(text)

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import traceback
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from web.history import clear_incomplete_task, record_incomplete_task
 from web.progress import PIPELINE_STAGES, ProgressTracker
@@ -178,12 +181,6 @@ def run_analysis_in_thread(
     tracker.trade_date = trade_date
     tracker.is_running = True
     tracker.mark_stage_active("market")
-    record_incomplete_task(
-        ticker,
-        trade_date,
-        status="running",
-        completed_stages=tracker.completed_stages,
-    )
 
     def _target() -> None:
         try:
@@ -207,4 +204,25 @@ def run_analysis_in_thread(
 
     t = threading.Thread(target=_target, daemon=True)
     t.start()
+
+    # The index write happens **after** the worker is running, never before.
+    #
+    # It writes to disk, and a write that is refused (security software, a sandbox
+    # that only allows certain paths) used to be able to hold up the whole analysis
+    # *before its thread existed*: `tempfile` spins up to 10000 times on a
+    # PermissionError when the directory merely looks writable, so the UI showed
+    # "分析进行中" at 100% CPU with 0 LLM calls, forever (measured 2026-10-08). The
+    # index is a convenience for the "unfinished tasks" list; it must never be on the
+    # critical path of starting an analysis.
+    if tracker.is_running and not tracker.is_complete:
+        try:
+            record_incomplete_task(
+                ticker,
+                trade_date,
+                status="running",
+                completed_stages=tracker.completed_stages,
+            )
+        except Exception as exc:  # noqa: BLE001 — 索引写不进去不该影响分析
+            logger.warning("记录未完成任务失败（不影响分析继续）：%s", exc)
+
     return t

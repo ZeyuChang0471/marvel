@@ -325,6 +325,16 @@ MARVEL.exe
 > **`web/app.py`**（真正可能卡死的那个进程）而不是 `web/launch.py`——后者只是把前者当
 > 子进程起，挂在父进程上抓不到子进程的栈。
 
+**如果日志里出现「目录拒绝创建临时文件」**，那是安全软件/沙箱按路径拦住了新建文件
+（ACL 看起来完全正常也会这样）。MARVEL 不会因此卡住——写入会降级为直接覆写并告警，
+分析照常进行——但**报告可能存不下来**。处理办法：给 `~/.marvel`（或
+`MARVEL_RESULTS_DIR` 指向的目录）在安全软件里加白名单，或把状态目录换到允许写入的位置：
+
+```bat
+set MARVEL_RESULTS_DIR=D:\marvel-data\logs
+set MARVEL_CACHE_DIR=D:\marvel-data\cache
+```
+
 ### 访问范围与鉴权
 
 服务**默认只绑定 `127.0.0.1`**（见 `.streamlit/config.toml` 的 `server.address`），也就是只有本机能访问。这样做是因为本应用**没有登录机制**，而 Streamlit 服务所有访问者共用同一个进程——一旦暴露到网络，任何能连上端口的人都能：
