@@ -8,6 +8,7 @@ from datetime import date
 import streamlit as st
 
 from marvel.llm_clients.model_catalog import MODEL_OPTIONS
+from marvel.default_config import DEFAULT_CONFIG
 from web.history import get_history
 
 # Provider display names in recommended order
