@@ -280,6 +280,35 @@ streamlit run web/app.py
 
 打开浏览器访问 `http://localhost:8501`。
 
+### 桌面快捷方式（Windows）
+
+Windows 上可以做一个双击即用的启动器，不必每次开终端：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build_desktop_launcher.ps1
+```
+
+它用系统自带的 `.NET Framework` 编译器（`csc.exe`）把
+`scripts/desktop_launcher/MarvelLauncher.cs` 编译成桌面上的 `MARVEL.exe`，
+**不需要联网，也不需要 PyInstaller**。启动器的行为：
+
+- **已经有一个实例在跑**时，不再报「端口被占用」——它会直接打开浏览器（套两层
+  `streamlit run` 会得到空白页，所以绝不会起第二个服务）；
+- 端口被**别的程序**占用时说清楚，而不是抛一个看不懂的错；
+- **等健康检查通过再打开浏览器**，不会让你看到一个「无法连接」的页面；
+- 把服务端的 stdout/stderr 同时写到控制台和 `~/.marvel/logs/web_ui.log` ——
+  排查卡死时这是唯一的现场证据；
+- 出错或退出时保留窗口并打印日志尾部。
+
+### 卡住了怎么办
+
+运行界面会显示「最后进展 N 秒/分钟前」，并展开「⏱️ 数据源耗时」。分析是串行的，
+如果长时间不动，耗时最长的那一项通常就是它卡住的地方。
+
+超过 `MARVEL_STALL_TIMEOUT_S`（默认 300 秒）没有任何进展时，界面会出现
+**「🛑 强制复位」**按钮：放弃本次分析、清理断点记录、回到可用状态。在此之前，运行态
+没有任何出口（「开始分析」在运行时是禁用的），只能重启整个应用。
+
 ### 访问范围与鉴权
 
 服务**默认只绑定 `127.0.0.1`**（见 `.streamlit/config.toml` 的 `server.address`），也就是只有本机能访问。这样做是因为本应用**没有登录机制**，而 Streamlit 服务所有访问者共用同一个进程——一旦暴露到网络，任何能连上端口的人都能：
