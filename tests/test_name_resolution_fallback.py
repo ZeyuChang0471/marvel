@@ -104,14 +104,36 @@ class TestNameResolvesWithoutMootdx:
         assert a_stock.resolve_ticker("600487") == "600487"
         assert a_stock.resolve_ticker("SH600487") == "600487"
 
-    def test_the_map_still_wins_when_it_is_available(
+    def test_the_online_lookup_is_tried_before_the_map(
         self, monkeypatch, map_available
     ):
-        """The HTTP path is a fallback, not a replacement."""
-        def explode(*args, **kwargs):
-            raise AssertionError("名称映射可用时不该走在线查询")
+        """回归：顺序反了会让界面卡死两分钟。
 
-        monkeypatch.setattr(a_stock._requests, "get", explode)
+        `resolve_ticker` 是在 Web UI 侧边栏的「开始分析」回调里**同步**调用的
+        （sidebar.py:392），而建那张 mootdx 全市场映射表在「TCP 能连但协议不通」
+        的网络里要 80-140 秒（2026-10-08 实测 138.3s，其中 137.7s 花在
+        `_mootdx_call("stocks")`）。所以在线查询必须先走：它是一次 HTTP，约 0.5s。
+        """
+        def explode(*args, **kwargs):
+            raise AssertionError(
+                "在线查询已经能解析出结果，不该再去建 mootdx 映射表——"
+                "那一步在协议不通的网络里要两分钟，而它是在 UI 线程里跑的"
+            )
+
+        monkeypatch.setattr(a_stock, "_build_name_code_map", explode)
+        monkeypatch.setattr(
+            a_stock._requests,
+            "get",
+            lambda *a, **k: _smartbox(_hint(r"sh~600519~\u8d35\u5dde\u8305\u53f0~gzmt~GP-A")),
+        )
+
+        assert a_stock.resolve_ticker("贵州茅台") == "600519"
+
+    def test_the_map_is_still_used_when_the_online_lookup_finds_nothing(
+        self, monkeypatch, map_available
+    ):
+        """在线查询查不到时，映射表仍是后备（它支持子串匹配）。"""
+        monkeypatch.setattr(a_stock._requests, "get", lambda *a, **k: _smartbox(_hint()))
 
         assert a_stock.resolve_ticker("贵州茅台") == "600519"
 

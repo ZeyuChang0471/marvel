@@ -301,11 +301,16 @@ def resolve_ticker(user_input: str) -> str:
     Raises: ValueError if not resolvable.
 
     A 6-digit code needs no lookup at all, so it keeps working with no network.
-    A Chinese name is resolved from the mootdx full-market map when that is
-    reachable, and otherwise **over HTTP** (Tencent smartbox) — the mootdx map
-    needs TCP 7709, which corporate networks, proxies and firewalls routinely
-    block, and without the HTTP path a blocked port made the whole app unusable
-    for anyone who types a name instead of a code.
+    A Chinese name is resolved **over HTTP first** (Tencent smartbox, one request,
+    ~0.5s) and from the mootdx full-market map only when that finds nothing.
+
+    The map is the better *matcher* — it supports substring lookups — but it needs
+    TCP 7709, and when that port accepts connections without answering the Tongdaxin
+    protocol, building it costs 80–140 seconds of serial server probing. This
+    function is called **synchronously from the Web UI's sidebar**, so with the old
+    map-first order the interface froze for over two minutes before the analysis had
+    even started. Measured on 2026-10-08: `resolve_ticker("亨通光电")` took 138.3s, of
+    which 137.7s was `_mootdx_call("stocks")`.
     """
     s = user_input.strip()
     if not s:
@@ -318,32 +323,13 @@ def resolve_ticker(user_input: str) -> str:
 
     clean = s.replace(" ", "").replace("　", "")
 
-    # 1) The full-market map (needs mootdx, but supports substring matching).
-    map_error: str | None = None
-    n2c: dict[str, str] = {}
-    try:
-        n2c, _ = _build_name_code_map()
-    except ValueError as exc:
-        map_error = str(exc)
-        logger.info("名称映射不可用（%s），改用在线查询：%s", type(exc).__name__, clean)
-
-    if n2c:
-        if clean in n2c:
-            return n2c[clean]
-
-        matches = {name: code for name, code in n2c.items() if clean in name}
-        if len(matches) == 1:
-            return next(iter(matches.values()))
-        if len(matches) > 1:
-            examples = ", ".join(f"{n}({c})" for n, c in list(matches.items())[:5])
-            raise ValueError(f"'{s}' 匹配到多只股票: {examples}，请输入完整名称或代码")
-
-    # 2) Online lookup — the path that works when TCP 7709 is blocked.
+    # 1) Online lookup. One HTTP request, and the only path that works at all when
+    #    TCP 7709 is blocked — tried first purely because of how much faster it is.
     candidates: list[tuple[str, str]] = []
     lookup_error: str | None = None
     try:
         candidates = _fetch_name_candidates(clean)
-    except Exception as exc:  # noqa: BLE001 — fall through to the message below
+    except Exception as exc:  # noqa: BLE001 — fall through to the map below
         lookup_error = f"{type(exc).__name__}: {exc}"
         logger.warning("在线名称查询失败：%s", lookup_error)
 
@@ -358,21 +344,45 @@ def resolve_ticker(user_input: str) -> str:
             raise ValueError(f"'{s}' 匹配到多只股票: {examples}，请输入完整名称或代码")
         return candidates[0][1]
 
-    # 3) Nothing worked. Say which two things failed rather than blaming one.
-    if map_error:
-        detail = map_error.strip().rstrip("。.")
-        extra = f"在线名称查询也失败了（{lookup_error}）。" if lookup_error else ""
-        raise ValueError(
-            f"无法解析股票名称 '{s}'：{detail} {extra}"
-            f"请直接输入 6 位股票代码（如 '600487'）后重试。"
-        )
+    # 2) The full-market map — last resort, and potentially slow (see docstring).
+    map_error: str | None = None
+    n2c: dict[str, str] = {}
+    try:
+        n2c, _ = _build_name_code_map()
+    except ValueError as exc:
+        map_error = str(exc)
+        logger.info("名称映射不可用（%s），已尝试在线查询：%s", type(exc).__name__, clean)
 
-    # LLM 有时会把行业/概念名（如 '游戏'、'白酒'）当 ticker 传进来（#76）。
-    # 报错必须写明原因和正确用法，让模型能在下一次工具调用中自我纠正。
+    if n2c:
+        if clean in n2c:
+            return n2c[clean]
+
+        matches = {name: code for name, code in n2c.items() if clean in name}
+        if len(matches) == 1:
+            return next(iter(matches.values()))
+        if len(matches) > 1:
+            examples = ", ".join(f"{n}({c})" for n, c in list(matches.items())[:5])
+            raise ValueError(f"'{s}' 匹配到多只股票: {examples}，请输入完整名称或代码")
+
+    # 3) Nothing worked. Say which lookups were tried and which failed, but always
+    #    keep the #76 explainer: a model that passed an industry name ('游戏') must
+    #    be told that is not a ticker, or it will simply retry with another one.
+    details = []
+    if lookup_error:
+        details.append(f"在线名称查询失败（{lookup_error}）")
+    if map_error:
+        details.append(f"本地名称映射也不可用（{map_error.strip().rstrip('。.')}）")
+
+    attempted = ["在线名称查询（腾讯）"]
+    if n2c or map_error:
+        attempted.append("本地名称映射（通达信）")
+
+    prefix = f"无法解析股票名称 '{s}'：{'；'.join(details)}。" if details else ""
     raise ValueError(
-        f"找不到股票 '{s}'。ticker 参数只接受 6 位股票代码（如 '600519'）"
-        f"或完整股票名称（如 '贵州茅台'）；行业/概念/板块名（如 '游戏'）不是"
-        f"有效的股票标识。请改用目标个股的 6 位股票代码重试。"
+        f"{prefix}找不到股票 '{s}'。已尝试：{'、'.join(attempted)}。"
+        f"ticker 参数只接受 6 位股票代码（如 '600487'）或完整股票名称"
+        f"（如 '贵州茅台'）；行业/概念/板块名（如 '游戏'）不是有效的股票标识。"
+        f"请改用目标个股的 6 位股票代码（如 '600487'）后重试。"
     )
 
 
