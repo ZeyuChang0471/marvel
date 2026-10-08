@@ -490,6 +490,17 @@ _NAME_MAP_FAILURE_COOLDOWN_S = 300.0
 _name_map_failure: str | None = None
 _name_map_failed_until = 0.0
 
+#: 选服务器的**总时间预算**（秒）。每台服务器真实取数验证约 4 秒，而当 TCP 通、协议不通
+#: 时整张表都探不通：实测 14 台可达 × ~4.3s ≈ 60s，再加裸 factory 兜底又约 60s，
+#: 合计 137.7s。分析是串行的，这段时间里用户只能看着界面不动。
+#:
+#: 设 0 表示不限制（恢复旧行为）。这**不是**「失败 N 台就收手」——那种按失败台数提前退出
+#: 的写法早已被否决（见下方注释），因为它会漏掉列表靠后的可用服务器。这里限的是墙钟时间，
+#: 顺序完全不变：列表按实测延迟排序，健康的网络第一台就能用（约 4 秒），预算根本不会触发。
+_MOOTDX_SELECT_BUDGET_S = float(
+    os.environ.get("MARVEL_MOOTDX_SELECT_BUDGET_S", "30") or 0
+)
+
 # ⚠️ 曾经加过「连续 N 台协议失败就停手」的提前退出，已移除：三台远端拒绝**证明不了**
 # 本地网络封了协议，而列表里靠后的服务器完全可能是好的。提前收手会让那台可用服务器
 # 永远试不到，还顺手记下 5 分钟负缓存。省下的十几秒不值得换这个风险——真正的耗时
@@ -565,7 +576,16 @@ def reset_mootdx_client() -> None:
     global _mootdx_client, _mootdx_unavailable_until
     with _MOOTDX_LOCK:
         _mootdx_client = None
-        _mootdx_unavailable_until = 0.0
+        # ⚠️ 故意**不**清 `_mootdx_unavailable_until`。
+        #
+        # 这里曾经是 `_mootdx_unavailable_until = 0.0`，而那会让负缓存彻底失效：
+        # `_mootdx_call` 在数据调用失败时会调本函数，于是「一台服务器协议不通」的
+        # 结论刚被记下就被抹掉，下一次调用又去把 38 台服务器全探一遍（实测每轮
+        # 60~200 秒、满一个核 CPU），**永远不结束**——用户看到的就是「一查询就卡死
+        # 没反应，CPU 100%」。
+        #
+        # 丢弃 client 的用意是「别钉在坏服务器上」（#90），这个目的由清 `_mootdx_client`
+        # 就能达到；负缓存记的是「刚刚整表都探不通」，与钉住某个 client 无关，必须留着。
 
 
 @contextlib.contextmanager
@@ -643,7 +663,22 @@ def _get_mootdx_client():
         # 原顺序、逐台做真实取数验证，精选表依旧优先。
         reachable = _reachable_tdx_servers(_candidate_tdx_servers())
 
-        for ip, port in reachable:
+        # 总时间预算：不改变顺序、不改变"每台都真取到数才算通过"的判据，只是到点就
+        # 停手并如实说明"还剩几台没试"，而不是让一次取数无限期地探下去。
+        deadline = (
+            time.monotonic() + _MOOTDX_SELECT_BUDGET_S
+            if _MOOTDX_SELECT_BUDGET_S > 0
+            else float("inf")
+        )
+
+        for index, (ip, port) in enumerate(reachable):
+            if time.monotonic() > deadline:
+                logger.warning(
+                    "mootdx 选服务器超过 %.0f 秒预算，剩余 %d 台未验证即放弃"
+                    "（可用 MARVEL_MOOTDX_SELECT_BUDGET_S 调整，设 0 表示不限）",
+                    _MOOTDX_SELECT_BUDGET_S, len(reachable) - index,
+                )
+                break
             # 「TCP 通但通达信协议不通」有两种表现：factory 建连时握手就被拒，
             # 或者建出来了但取不到数。**两种都要算**——只统计后者的话，计数永远是 0
             # （实测这批服务器全是在 factory 里抛 ConnectionReset），下面的快速失败
@@ -667,15 +702,18 @@ def _get_mootdx_client():
     # ⚠️ 刻意**不用** `bestip=True`：它会把整张主机表做一遍测速，实测要几分钟。
     # `_candidate_tdx_servers()` 已经把 mootdx 自带的完整主机表逐台验证过了，
     # 覆盖面不比 bestip 差，而且每台都是"真取到数才算通过"。
-    try:
-        candidate = Quotes.factory(market="std")
-    except Exception as e:
-        logger.debug("mootdx 裸 factory 失败 — %s", e)
+    if time.monotonic() < deadline:
+        try:
+            candidate = Quotes.factory(market="std")
+        except Exception as e:
+            logger.debug("mootdx 裸 factory 失败 — %s", e)
+        else:
+            if _tdx_client_works(candidate):
+                logger.info("mootdx client from 裸 factory（用户已有配置）")
+                _mootdx_client = candidate
+                return _mootdx_client
     else:
-        if _tdx_client_works(candidate):
-            logger.info("mootdx client from 裸 factory（用户已有配置）")
-            _mootdx_client = candidate
-            return _mootdx_client
+        logger.warning("mootdx 预算已耗尽，跳过裸 factory 兜底（它同样要 4 秒级验证）")
 
     _mootdx_unavailable_until = time.time() + _MOOTDX_RETRY_AFTER_S
     if tcp_ok_but_dead:

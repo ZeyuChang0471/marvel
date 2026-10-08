@@ -22,19 +22,41 @@ from typing import Callable, Mapping
 #: Environment variable holding the dump interval in seconds (unset = disabled).
 ENV_VAR = "MARVEL_WEB_DUMP_STACKS"
 
+#: Armed-once guard. Streamlit re-executes `web/app.py` top-to-bottom on **every
+#: rerun** — and the running state reruns every two seconds — so arming from module
+#: scope without this reset the timer on each pass and it never fired. The first
+#: version of this module produced hundreds of "已开启" lines and not a single stack,
+#: which is worse than useless: it looked like diagnostics were on.
+_ARMED = False
+
 
 def arm_stack_dumps(
     env: Mapping[str, str] | None = None,
-    printer: Callable[[str], None] = print,
+    printer: Callable[[str], None] | None = None,
 ) -> float | None:
     """Arm periodic stack dumps when ``MARVEL_WEB_DUMP_STACKS`` is set.
 
     Returns the interval in seconds when armed, ``None`` otherwise. Never raises:
     a diagnostic must not be able to break the app it is meant to diagnose.
     """
+    global _ARMED
+
+    if printer is None:
+        # stderr, not stdout: Streamlit captures `print` from inside a script run and
+        # routes it to the browser instead of the terminal, so the "armed" notice sent
+        # via stdout never reached the log — while faulthandler's dumps (written
+        # straight to fd 2) did. Same destination as the dumps, same place to look.
+        def printer(line: str) -> None:  # type: ignore[misc]
+            import sys
+
+            print(line, file=sys.stderr, flush=True)
+
     env = os.environ if env is None else env
     raw = str(env.get(ENV_VAR, "") or "").strip()
     if not raw:
+        return None
+
+    if _ARMED:
         return None
 
     try:
@@ -55,8 +77,15 @@ def arm_stack_dumps(
         printer(f"[diagnostics] 无法开启线程栈转储：{exc}")
         return None
 
+    _ARMED = True
     printer(
         f"[diagnostics] 已开启线程栈定时转储：每 {interval:g} 秒把所有线程的栈写进本日志。"
         "排查卡死时把这段日志发出来即可定位到具体那一行。"
     )
     return interval
+
+
+def reset_armed_state() -> None:
+    """Forget that dumps were armed (tests only; the process keeps its timer)."""
+    global _ARMED
+    _ARMED = False

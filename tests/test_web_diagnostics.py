@@ -18,9 +18,60 @@ def _disarm():
     """Make sure an armed dump from one test cannot fire during another."""
     import faulthandler
 
+    diagnostics.reset_armed_state()
     faulthandler.cancel_dump_traceback_later()
     yield
+    diagnostics.reset_armed_state()
     faulthandler.cancel_dump_traceback_later()
+
+
+@pytest.mark.unit
+class TestItIsArmedExactlyOnce:
+    """回归：`app.py` 每次 rerun 都会重新执行，重新武装等于不断重置计时器。
+
+    第一版就是这样：日志里几百行「已开启线程栈定时转储」，**一条栈都没有**——
+    比没有诊断更糟，因为它看起来是开着的。
+    """
+
+    def test_the_second_call_does_not_rearm(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            "faulthandler.dump_traceback_later",
+            lambda interval, **kw: calls.append(interval),
+        )
+
+        first = diagnostics.arm_stack_dumps(
+            env={diagnostics.ENV_VAR: "30"}, printer=lambda _: None
+        )
+        second = diagnostics.arm_stack_dumps(
+            env={diagnostics.ENV_VAR: "30"}, printer=lambda _: None
+        )
+
+        assert first == 30
+        assert second is None
+        assert calls == [30.0], f"重复武装了 {len(calls)} 次——计时器会被不断重置"
+
+    def test_the_message_is_printed_only_once(self, monkeypatch):
+        monkeypatch.setattr("faulthandler.dump_traceback_later", lambda *a, **k: None)
+        printed = []
+
+        for _ in range(20):   # 模拟一次分析里几十次 rerun
+            diagnostics.arm_stack_dumps(
+                env={diagnostics.ENV_VAR: "30"}, printer=printed.append
+            )
+
+        assert len(printed) == 1, f"日志被刷了 {len(printed)} 行"
+
+    def test_a_bad_value_does_not_block_a_later_good_one(self, monkeypatch):
+        """值不合法时不该把 _ARMED 置上，否则改对了也不再生效。"""
+        monkeypatch.setattr("faulthandler.dump_traceback_later", lambda *a, **k: None)
+
+        assert diagnostics.arm_stack_dumps(
+            env={diagnostics.ENV_VAR: "abc"}, printer=lambda _: None
+        ) is None
+        assert diagnostics.arm_stack_dumps(
+            env={diagnostics.ENV_VAR: "30"}, printer=lambda _: None
+        ) == 30
 
 
 @pytest.mark.unit
