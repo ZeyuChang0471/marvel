@@ -2,10 +2,24 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
+
+def stall_timeout_s() -> float:
+    """How long a run may make no progress before the UI calls it stalled.
+
+    Generous by default: a single deep-analysis node can legitimately take minutes
+    (a slow model, a throttled data source), so this is not a timeout that kills
+    anything — it only decides when to *offer* the user a way out.
+    """
+    try:
+        return float(os.environ.get("MARVEL_STALL_TIMEOUT_S", "300"))
+    except ValueError:
+        return 300.0
 
 
 PIPELINE_STAGES: list[dict[str, str]] = [
@@ -46,6 +60,13 @@ class ProgressTracker:
     ticker: str = ""
     trade_date: str = ""
     start_time: float = field(default_factory=time.time)
+    #: When the run last did something observable. The UI compares this against the
+    #: wall clock to tell "still working" apart from "wedged", and it is the only
+    #: thing that makes a stuck run distinguishable from a slow one.
+    last_progress_at: float = field(default_factory=time.time)
+    #: Set by :meth:`force_reset` so the UI can explain why the run disappeared.
+    reset_forced: bool = False
+    reset_reason: str = ""
 
     is_running: bool = False
     is_complete: bool = False
@@ -169,11 +190,16 @@ class ProgressTracker:
             self.tokens_out = 0
             self._pause_gate.set()
 
+    def _touch(self) -> None:
+        """Record that the run advanced. Caller must hold the lock."""
+        self.last_progress_at = time.time()
+
     def mark_stage_active(self, stage_id: str) -> None:
         with self._lock:
             if self.stop_requested:
                 return
             self.current_stage = stage_id
+            self._touch()
 
     def mark_stage_done(self, stage_id: str, report: str = "") -> None:
         with self._lock:
@@ -184,6 +210,7 @@ class ProgressTracker:
             if report:
                 self.stage_reports[stage_id] = report
             self.current_stage = ""
+            self._touch()
 
     def mark_complete(self, final_state: dict, signal: str) -> None:
         with self._lock:
@@ -211,10 +238,67 @@ class ProgressTracker:
             self.tool_calls = tool
             self.tokens_in = tok_in
             self.tokens_out = tok_out
+            self._touch()
 
     @property
     def elapsed(self) -> float:
         return time.time() - self.start_time
+
+    @property
+    def stalled_for(self) -> float:
+        """Seconds since the last observable progress."""
+        return max(0.0, time.time() - self.last_progress_at)
+
+    def is_stalled(self, threshold: float | None = None) -> bool:
+        """True when a *running* analysis has shown no progress for too long.
+
+        A paused run is exempt: doing nothing is what pause means, and flagging it
+        would train the user to ignore the warning.
+        """
+        if not self.is_running or self.is_complete or self.error:
+            return False
+        if self.is_paused:
+            return False
+        limit = stall_timeout_s() if threshold is None else threshold
+        return self.stalled_for > limit
+
+    def force_reset(self, reason: str = "") -> bool:
+        """Give the UI its controls back when a run is wedged.
+
+        Until this existed there was no way out of the running state: the start
+        button is disabled while a run is in flight, so a run whose worker thread
+        was stuck inside a blocking call (or one that never advanced again) left the
+        user with nothing to click — the only recovery was restarting the whole app,
+        which is exactly what happened in practice.
+
+        The worker thread is a daemon and may still be blocked; abandoning it is
+        acceptable. What matters is that the tracker stops reporting "running", the
+        incomplete-task record is cleared by the caller, and the UI returns to a
+        usable state.
+        """
+        with self._lock:
+            if not self.is_running:
+                return False
+            self.is_running = False
+            self.is_paused = False
+            self.is_complete = False
+            self.error = reason or "运行已卡死，已由用户强制复位"
+            self.stop_requested = True
+            self.reset_forced = True
+            self.reset_reason = reason
+            self.final_state = {}
+            self.signal = ""
+            self._pause_gate.set()
+            self._touch()
+            return True
+
+    @property
+    def stalled_hint(self) -> str:
+        """Human sentence for the UI: how long, and what to do about it."""
+        seconds = self.stalled_for
+        if seconds < 90:
+            return f"最后进展：{int(seconds)} 秒前"
+        return f"最后进展：{seconds / 60:.1f} 分钟前"
 
     def stage_status(self, stage_id: str) -> str:
         with self._lock:

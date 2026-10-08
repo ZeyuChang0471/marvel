@@ -21,7 +21,7 @@ from marvel.default_config import DEFAULT_CONFIG  # noqa: E402
 from web.components.progress_panel import render_progress  # noqa: E402
 from web.components.report_viewer import render_report  # noqa: E402
 from web.components.sidebar import render_sidebar, session_api_key  # noqa: E402
-from web.history import extract_signal, load_analysis  # noqa: E402
+from web.history import clear_incomplete_task, extract_signal, load_analysis  # noqa: E402
 from web.progress import ProgressTracker  # noqa: E402
 from web.runner import run_analysis_in_thread  # noqa: E402
 
@@ -247,13 +247,40 @@ if viewing_history:
         signal = extract_signal(state)
         ticker = Path(viewing_history).parent.parent.name
         trade_date = Path(viewing_history).stem.replace("full_states_log_", "")
-        render_report(state, ticker, trade_date, signal)
+        render_report(
+            state, ticker, trade_date, signal,
+            cache_key=f"history:{viewing_history}",
+        )
     except Exception as exc:
         st.error(f"加载失败: {exc}")
 
 # State 2: Analysis running
 elif tracker and tracker.is_running:
     render_progress(tracker)
+
+    # A wedged run must not be a dead end. Before this, the only way out of the
+    # running state was restarting the whole app: the start button is disabled
+    # while a run is in flight, and nothing here ever offered to abandon one.
+    if tracker.is_stalled():
+        st.warning(
+            f"⚠️ 分析已经 {int(tracker.stalled_for)} 秒没有任何进展"
+            "（可能卡在某个数据源或模型调用上）。"
+        )
+        st.caption(
+            "可以先看下面的「数据源耗时」，判断是哪个源慢；确认无望再强制复位。"
+        )
+        if st.button("🛑 强制复位（放弃本次分析并清理断点）", type="primary"):
+            ticker_stuck, date_stuck = tracker.ticker, tracker.trade_date
+            tracker.force_reset("用户在界面强制复位")
+            try:
+                clear_incomplete_task(ticker_stuck, date_stuck)
+            except Exception as exc:  # noqa: BLE001 — 复位本身不能失败
+                st.caption(f"（清理断点记录时出错，可忽略：{exc}）")
+            st.session_state.pop("tracker", None)
+            st.session_state["analysis_reset"] = True
+            st.rerun()
+        st.caption(tracker.stalled_hint)
+
     time.sleep(2)
     st.rerun()
 
@@ -265,6 +292,9 @@ elif tracker and tracker.is_complete:
         tracker.trade_date,
         tracker.signal,
         elapsed=tracker.elapsed,
+        # start_time is unique per run, so a re-run of the same ticker/date in one
+        # session cannot collide with the previous report's cached exports.
+        cache_key=f"run:{tracker.ticker}:{tracker.trade_date}:{tracker.start_time}",
     )
 
 # State 4: Analysis errored
@@ -280,6 +310,11 @@ else:
     # would just see the welcome screen again and wonder where the report went.
     if st.session_state.pop("analysis_stopped", None):
         st.info("上一次分析已被你停止，未完成的产物已清理。")
+    if st.session_state.pop("analysis_reset", None):
+        st.warning(
+            "上一次分析因为长时间无进展被你强制复位：断点记录已清理，可以重新开始。"
+            "如果它反复卡在同一阶段，请看「数据源耗时」，那能指出是哪个源。"
+        )
     st.markdown(
         """
         <div style="

@@ -34,6 +34,7 @@ import pandas as pd
 import requests as _requests
 
 from .utils import atomic_write_text, safe_ticker_component
+from .timing import timed
 from .as_of import analysis_date, clamp_arguments
 
 logger = logging.getLogger(__name__)
@@ -674,13 +675,14 @@ def _mootdx_call(method: str, **kwargs):
     整段（选服务器 + 取数）都在 `_MOOTDX_LOCK` 内：单条 TCP 连接不是线程安全的，
     选服务器时还会改写 mootdx 的持久化配置。
     """
-    with _MOOTDX_LOCK:
-        client = _get_mootdx_client()
-        try:
-            return getattr(client, method)(**kwargs)
-        except Exception:
-            reset_mootdx_client()
-            raise
+    with timed(f"mootdx {method}", slow_over=8.0):
+        with _MOOTDX_LOCK:
+            client = _get_mootdx_client()
+            try:
+                return getattr(client, method)(**kwargs)
+            except Exception:
+                reset_mootdx_client()
+                raise
 
 
 # ---------------------------------------------------------------------------
@@ -815,6 +817,16 @@ def _em_get(url, params=None, headers=None, timeout=15, **kwargs):
     **抛出**，而不是把失败响应交给调用方当空数据用。整段重试都在 `_EM_LOCK` 内，与
     节流共用同一把锁——这里本来就是「串行访问东财」的意思。
     """
+    last_exc: Exception | None = None
+    # 打点：慢与卡死必须能区分开。_em_get 是东财所有端点的唯一入口，所以在这一层
+    # 计时就能覆盖全部 7 个调用点。名称要带上**子域**——push2 / datacenter-web /
+    # np-anotice-stock 才是区分这 7 个端点的部分，只留路径等于没记。
+    label = "eastmoney " + str(url).split("://", 1)[-1][:60]
+    with timed(label, slow_over=_EM_MIN_INTERVAL + 2.0):
+        return _em_get_inner(url, params, headers, timeout, kwargs)
+
+
+def _em_get_inner(url, params, headers, timeout, kwargs):
     last_exc: Exception | None = None
     with _EM_LOCK:
         for attempt in range(_EM_MAX_RETRIES + 1):
@@ -2028,7 +2040,8 @@ def _collect_stock_news(
 
     for label, fetch in sources:
         try:
-            items = fetch() or []
+            with timed(f"新闻源 {label}", slow_over=3.0):
+                items = fetch() or []
         except Exception as exc:  # noqa: BLE001 — one dead feed must not empty the list
             logger.warning("news source %s failed for %s: %s", label, code, exc)
             counts[label] = 0

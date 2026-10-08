@@ -9,8 +9,17 @@ analysis is in flight `web/app.py` reruns on a two-second timer. `web/` had **no
   font — and re-serialised the bytes to the browser;
 * re-ran `get_history()`, a full walk of the saved-log tree.
 
-The results are cached on identical inputs, so the behaviour is unchanged and
-only the repeated work disappears.
+The results are cached, so the behaviour is unchanged and only the repeated work
+disappears.
+
+**The export cache was later rebuilt on a cheaper key.** `@st.cache_data` hashes
+every argument on every rerun, and the argument here was `final_state` — the entire
+pipeline state, several hundred KB of nested reports plus LangChain message objects
+in `messages`. So the lookup itself became the expensive part on a page that reruns
+on every interaction, and `max_entries=8` held up to eight multi-hundred-KB PDFs
+pickled besides. It now keys on a cheap report identity (saved path, or run
+identity) and holds exactly one report; a PDF failure is remembered rather than
+retried on every rerun. These tests check that intent, not the decorator.
 """
 
 from __future__ import annotations
@@ -28,29 +37,47 @@ def _read(*parts: str) -> str:
 
 @pytest.mark.unit
 class TestExportsAreCached:
-    def test_the_cached_wrappers_exist_and_are_decorated(self):
+    def test_the_export_cache_is_keyed_on_a_cheap_report_identity(self):
         src = _read("web", "components", "report_viewer.py")
-        assert src.count("@st.cache_data") >= 2, "导出没有缓存装饰器"
-        assert "def _cached_pdf(" in src
-        assert "def _cached_markdown(" in src
+        assert "def _exports(" in src
+        assert "cache_key" in src
+        assert "_EXPORT_CACHE" in src, "导出没有缓存"
 
-    def test_render_report_calls_the_cached_wrappers(self):
-        src = _read("web", "components", "report_viewer.py")
-        assert "_cached_pdf(final_state" in src, "结果页仍在直接生成 PDF"
-        assert "_cached_markdown(final_state" in src, "结果页仍在直接生成 Markdown"
+    def test_the_whole_final_state_is_not_a_cache_argument(self):
+        """回归：`final_state` 曾被当作 `@st.cache_data` 的参数，每次 rerun 都要
+        哈希整个流水线状态——缓存本身成了页面上最贵的一步。
 
-    def test_the_raw_generators_are_only_called_inside_the_wrappers(self):
+        按行首匹配装饰器，而不是查子串：本文件上面的说明里就写着
+        `@st.cache_data`，子串匹配会把注释当成代码（这类误报在这个仓库里已经
+        出现过一次）。
+        """
         src = _read("web", "components", "report_viewer.py")
-        assert src.count("return generate_pdf(") == 1
-        assert src.count("return generate_markdown(") == 1
+        decorators = [
+            line.strip() for line in src.splitlines()
+            if line.strip().startswith("@st.cache_data")
+        ]
+        assert decorators == [], f"导出又用回了整状态做缓存键: {decorators}"
+        assert "_cached_pdf(final_state" not in src
+        assert "_cached_markdown(final_state" not in src
+
+    def test_render_report_uses_the_cache(self):
+        src = _read("web", "components", "report_viewer.py")
+        assert "exports = _exports(" in src, "结果页没有走缓存"
+        assert 'exports["markdown"]' in src
+        assert 'exports["pdf"]' in src
+
+    def test_the_raw_generators_are_only_called_inside_the_cache(self):
+        src = _read("web", "components", "report_viewer.py")
+        assert src.count("generate_pdf(") == 1
+        assert src.count("generate_markdown(") == 1
 
     def test_cached_markdown_matches_the_generator(self):
         """缓存不得改变输出——只是省掉重复计算。"""
-        from web.components.report_viewer import _cached_markdown
+        from web.components.report_viewer import _exports
         from web.pdf_export import generate_markdown
 
         state = {"market_report": "正文", "final_trade_decision": "**Rating**: Hold"}
-        cached = _cached_markdown(state, "600519", "2026-05-12", "Hold")
+        cached = _exports(state, "600519", "2026-05-12", "Hold", "unit:1")["markdown"]
         direct = generate_markdown(state, "600519", "2026-05-12", "Hold")
 
         assert cached == direct
@@ -79,8 +106,13 @@ class TestHistoryScanIsCached:
 @pytest.mark.unit
 class TestCachingIsAppliedWhereItWasMissing:
     def test_web_has_caching_at_all(self):
-        """回归：`web/` 曾经一处 `@st.cache_data` 都没有。"""
+        """回归：`web/` 曾经一处缓存都没有。
+
+        结果页后来改用按「报告标识」为键的自建缓存（`_EXPORT_CACHE`），所以这里
+        数的是两种缓存之和，而不是只数装饰器。
+        """
         hits = 0
         for path in (REPO_ROOT / "web").rglob("*.py"):
-            hits += path.read_text(encoding="utf-8").count("@st.cache_data")
-        assert hits >= 3, f"web/ 里的缓存装饰器只有 {hits} 处"
+            src = path.read_text(encoding="utf-8")
+            hits += src.count("@st.cache_data") + src.count("_EXPORT_CACHE")
+        assert hits >= 3, f"web/ 里的缓存只有 {hits} 处"

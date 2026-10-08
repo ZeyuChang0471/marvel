@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from typing import Any
 
 import streamlit as st
@@ -15,25 +16,52 @@ def _strip_think(text: str) -> str:
     return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
 
 
-# Export generation is cached per identical final state.
+# Export generation, cached per *report* rather than per identical final state.
 #
-# Streamlit re-executes the entire script on every widget interaction, and the
-# results page re-renders on each of those reruns. Both exporters re-run the
-# mention-normalisation regexes over every report; the PDF additionally embeds a
-# CJK font. Without caching, every rerun rebuilt the PDF and re-serialised
-# multi-megabyte bytes to the browser.
-@st.cache_data(show_spinner=False, max_entries=8)
-def _cached_markdown(
-    final_state: dict, ticker: str, trade_date: str, signal: str
-) -> str:
-    return generate_markdown(final_state, ticker, trade_date, signal)
+# These were @st.cache_data functions taking `final_state` as an argument. Streamlit
+# hashes every argument on every rerun, and this dict is the whole pipeline state —
+# several hundred KB of nested reports, plus LangChain message objects in
+# `messages`. The results page re-executes on every widget interaction, so that
+# hashing ran constantly, and `max_entries=8` kept up to eight multi-hundred-KB PDFs
+# pickled in the cache besides.
+#
+# Keyed on a cheap identity instead (path for a saved report, run identity for a live
+# one), the lookup is O(1) and only the report being viewed is held. A PDF failure is
+# remembered too — previously the failing generation was retried on every single
+# rerun.
+_EXPORT_CACHE: dict[str, dict[str, Any]] = {}
+_EXPORT_CACHE_LOCK = threading.Lock()
 
 
-@st.cache_data(show_spinner=False, max_entries=8)
-def _cached_pdf(
-    final_state: dict, ticker: str, trade_date: str, signal: str
-) -> bytes:
-    return generate_pdf(final_state, ticker, trade_date, signal)
+def _exports(
+    final_state: dict,
+    ticker: str,
+    trade_date: str,
+    signal: str,
+    cache_key: str | None = None,
+) -> dict[str, Any]:
+    """Return ``{"markdown": str, "pdf": bytes|None, "pdf_error": str|None}``."""
+    key = cache_key or f"{ticker}:{trade_date}:{signal}"
+
+    with _EXPORT_CACHE_LOCK:
+        entry = _EXPORT_CACHE.get(key)
+    if entry is not None:
+        return entry
+
+    entry = {
+        "markdown": generate_markdown(final_state, ticker, trade_date, signal),
+        "pdf": None,
+        "pdf_error": None,
+    }
+    try:
+        entry["pdf"] = generate_pdf(final_state, ticker, trade_date, signal)
+    except Exception as exc:  # noqa: BLE001 — a PDF failure must not break the page
+        entry["pdf_error"] = str(exc)
+
+    with _EXPORT_CACHE_LOCK:
+        _EXPORT_CACHE.clear()   # one report at a time keeps memory bounded
+        _EXPORT_CACHE[key] = entry
+    return entry
 
 
 def _signal_style(signal: str) -> tuple[str, str]:
@@ -79,8 +107,14 @@ def render_report(
     trade_date: str,
     signal: str,
     elapsed: float | None = None,
+    cache_key: str | None = None,
 ) -> None:
-    """Render the full analysis report."""
+    """Render the full analysis report.
+
+    ``cache_key`` identifies *this* report cheaply (saved path, or run identity) so
+    the exports are built once instead of re-hashing the whole state on every rerun.
+    """
+    exports = _exports(final_state, ticker, trade_date, signal, cache_key)
 
     color, cn_signal = _signal_style(signal)
     ticker_label = stock_display_label(ticker, final_state)
@@ -119,7 +153,7 @@ def render_report(
     # lazily and guarded so a PDF/font failure never crashes the results page.
     col_md, col_pdf, col_spacer = st.columns([1, 1, 2])
     with col_md:
-        md_text = _cached_markdown(final_state, ticker, trade_date, signal)
+        md_text = exports["markdown"]
         st.download_button(
             "📥 下载 Markdown",
             data=md_text.encode("utf-8"),
@@ -128,21 +162,25 @@ def render_report(
             use_container_width=True,
         )
     with col_pdf:
-        try:
-            pdf_bytes = _cached_pdf(final_state, ticker, trade_date, signal)
+        if exports["pdf"] is not None:
             st.download_button(
                 "📄 下载 PDF",
-                data=pdf_bytes,
+                data=exports["pdf"],
                 file_name=f"MARVEL_{_safe_filename_label(ticker_label)}_{trade_date}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
             )
-        except Exception as exc:  # noqa: BLE001 — never let PDF crash the page
+        else:
+            # The failure is remembered with the report: retrying it on every rerun
+            # was wasted work and doubled as a way to make a slow page slower.
             st.button(
                 "📄 PDF 不可用",
                 disabled=True,
                 use_container_width=True,
-                help=f"PDF 生成失败，请改用 Markdown 导出。原因：{exc}",
+                help=(
+                    "PDF 生成失败，请改用 Markdown 导出。原因："
+                    f"{exports['pdf_error']}"
+                ),
             )
 
     st.markdown("---")

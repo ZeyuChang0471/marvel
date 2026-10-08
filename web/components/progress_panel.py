@@ -2,9 +2,37 @@
 
 from __future__ import annotations
 
+import time
+
 import streamlit as st
 
+from marvel.dataflows import timing
 from web.progress import ANALYST_STAGES, PIPELINE_ONLY_STAGES, ProgressTracker
+
+
+def _render_source_timings(tracker: ProgressTracker) -> None:
+    """Show how long recent data fetches took.
+
+    This is the difference between "it is slow" and "it is wedged": every source is
+    a blocking call and the pipeline is sequential, so when a run stops advancing
+    the slowest recent fetch is the prime suspect. Before this the UI showed only
+    LLM/token counters, which stay frozen for exactly as long as the fetch does —
+    the user could not tell a 90-second Eastmoney retry storm from a deadlock.
+    """
+    samples = timing.recent(10)
+    if not samples:
+        return
+
+    with st.expander(f"⏱️ 数据源耗时（最近 {len(samples)} 次）", expanded=tracker.is_stalled()):
+        st.caption(
+            "分析是串行的：如果卡住不动，耗时最长的那一项通常就是它卡的地方。"
+            "（`MARVEL_STALL_TIMEOUT_S` 可调强制复位按钮出现的等待时长，默认 5 分钟。）"
+        )
+        for name, seconds, finished_at in reversed(samples):
+            ago = max(0.0, time.time() - finished_at)
+            st.markdown(
+                f"- `{name}` — **{seconds:.1f}s**（{ago:.0f} 秒前完成）"
+            )
 
 
 def _status_badge(status: str) -> str:
@@ -123,6 +151,8 @@ def render_progress(tracker: ProgressTracker) -> None:
 
     if tracker.error:
         st.error(f"错误: {tracker.error}")
+
+    _render_source_timings(tracker)
 
     # Snapshot under the tracker's lock: the runner thread writes this dict and
     # both request_stop() and mark_stopped() clear it. Reading it directly meant
