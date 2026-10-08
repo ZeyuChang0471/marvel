@@ -1807,13 +1807,15 @@ def _fetch_news_eastmoney(code: str, page_size: int = 20) -> list[dict]:
     return articles
 
 
-def _fetch_news_sina(code: str, page_size: int = 20) -> list[dict]:
-    """Sina Finance stock news API (backup source)."""
+def _fetch_news_sina(code: str, pages: int = 2, page_size: int = 40) -> list[dict]:
+    """Sina Finance stock news (press feed). Titles + links, no body text.
+
+    Only page 1 used to be read, and its 39 rows were then truncated to 20 — the
+    single most common reason the news window looked empty. Two pages are fetched
+    by default; the list is a *press* feed, so it is the lowest-signal of the
+    three and its bodies are not available without one request per article.
+    """
     prefix = _get_prefix(code)
-    url = (
-        f"https://vip.stock.finance.sina.com.cn/corp/view/"
-        f"vCB_AllNewsStock.php?symbol={prefix}{code}&Page=1"
-    )
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -1822,29 +1824,255 @@ def _fetch_news_sina(code: str, page_size: int = 20) -> list[dict]:
         "Referer": "https://finance.sina.com.cn/",
     }
 
-    resp = _requests.get(url, headers=headers, timeout=15)
-    resp.raise_for_status()
-    resp.encoding = "gb2312"
-    html = resp.text
+    articles: list[dict] = []
+    seen: set[str] = set()
+    for page in range(1, max(1, pages) + 1):
+        url = (
+            f"https://vip.stock.finance.sina.com.cn/corp/view/"
+            f"vCB_AllNewsStock.php?symbol={prefix}{code}&Page={page}"
+        )
+        resp = _requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        resp.encoding = "gb2312"
+
+        rows = _re.findall(
+            r"(\d{4}-\d{2}-\d{2})\s*(?:&nbsp;)*(\d{2}:\d{2})\s*(?:&nbsp;)*"
+            r"<a[^>]+href='([^']+)'[^>]*>([^<]+)</a>",
+            resp.text,
+        )
+        if not rows:
+            break  # no further pages; stop asking
+        for date_str, time_str, link, title in rows:
+            title = _strip_html(title)
+            if not title or title in seen:
+                continue
+            seen.add(title)
+            articles.append({
+                "title": title,
+                "content": "",
+                "time": f"{date_str} {time_str}",
+                "source": "新浪财经",
+                "url": link,
+                "kind": "新闻",
+            })
+
+    return articles[:page_size]
+
+
+_NEWS_DATE_RE = _re.compile(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})")
+
+_TAG_RE = _re.compile(r"<[^>]+>")
+
+
+def _strip_html(text: str) -> str:
+    """Turn a feed's HTML snippet into readable text.
+
+    The East Money search API wraps matched keywords in ``<em>`` and sends
+    entities; left as-is they land in the news analyst's prompt as markup, which
+    is both noise and (for ``&nbsp;``) mis-tokenised.
+    """
+    if not text:
+        return ""
+    import html as _html
+
+    text = _TAG_RE.sub("", text)
+    text = _html.unescape(text)
+    text = text.replace("\u3000", " ").replace("\xa0", " ")
+    return _re.sub(r"\s+", " ", text).strip()
+
+
+def _news_dedup_key(title: str) -> str:
+    """A cross-source identity for one story.
+
+    The same announcement arrives with different prefixes per source::
+
+        江苏亨通光电股份有限公司 关于控股股东部分股权解除质押公告   (新浪)
+        亨通光电:亨通光电关于控股股东部分股权解除质押公告          (东财公告)
+
+    Normalising away punctuation and the company-name prefix, then comparing the
+    tail, collapses those two into one entry instead of showing the reader the
+    same event twice.
+    """
+    normalised = _re.sub(r"[\s:：,，.。;；、\"'“”()（）\[\]【】《》\-—_/|]+", "", title or "")
+    marker = normalised.find("关于")
+    if marker > 0:
+        normalised = normalised[marker:]
+    return normalised[-24:] if len(normalised) > 24 else normalised
+
+
+def _fetch_news_announcements(code: str, page_size: int = 30) -> list[dict]:
+    """Company announcements (公告) via East Money — the highest-signal feed.
+
+    Announcements are what actually moves an A-share: 减持/增持, 立案调查, 业绩预告,
+    解禁, 股权质押. They are also the one per-stock feed that is *dated and
+    paginated by the source*, so a historical window can be reconstructed far more
+    faithfully than from a "latest news" list.
+    """
+    url = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+    params = {
+        "sr": "-1",              # newest first
+        "page_size": str(page_size),
+        "page_index": "1",
+        "ann_type": "A",
+        "client_source": "web",
+        "stock_list": code,
+    }
+    response = _em_get(url, params=params, timeout=15)
+    response.raise_for_status()
+    payload = response.json()
 
     articles: list[dict] = []
-    rows = _re.findall(
-        r"(\d{4}-\d{2}-\d{2})\s*(?:&nbsp;)*(\d{2}:\d{2})\s*(?:&nbsp;)*"
-        r"<a[^>]+href='([^']+)'[^>]*>([^<]+)</a>",
-        html,
-    )
-    for date_str, time_str, link, title in rows[:page_size]:
+    for item in (payload.get("data") or {}).get("list") or []:
+        art_code = item.get("art_code", "")
         articles.append({
-            "title": title.strip(),
+            "title": _strip_html(item.get("title", "")),
             "content": "",
-            "time": f"{date_str} {time_str}",
-            "source": "新浪财经",
-            "url": link,
+            "time": item.get("notice_date", "") or item.get("display_time", ""),
+            "source": "东方财富公告",
+            "url": (
+                f"https://data.eastmoney.com/notices/detail/{code}/{art_code}.html"
+                if art_code
+                else ""
+            ),
+            "kind": "公告",
         })
     return articles
 
 
-_NEWS_DATE_RE = _re.compile(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})")
+def _fetch_news_research(
+    code: str, page_size: int = 20, start_date: str = "", end_date: str = ""
+) -> list[dict]:
+    """Broker research reports (研报) via East Money, filtered on publish date.
+
+    Takes the publication window as a request parameter, so unlike the "latest
+    news" feeds this source is point-in-time correct by construction: asking for a
+    window that ends on the analysis date cannot return a later report.
+    """
+    if not end_date:
+        return []
+    url = "https://reportapi.eastmoney.com/report/list"
+    params = {
+        "industryCode": "*",
+        "pageSize": str(page_size),
+        "industry": "*",
+        "rating": "*",
+        "ratingChange": "*",
+        "beginTime": start_date or end_date,
+        "endTime": end_date,
+        "pageNo": "1",
+        "fields": "",
+        "qType": "0",
+        "code": code,
+    }
+    response = _em_get(url, params=params, timeout=15)
+    response.raise_for_status()
+    payload = response.json()
+
+    articles: list[dict] = []
+    for item in payload.get("data") or []:
+        info_code = item.get("infoCode", "")
+        org = item.get("orgSName") or item.get("orgName") or ""
+        title = _strip_html(item.get("title", ""))
+        articles.append({
+            "title": f"{title}（{org}）" if org else title,
+            "content": _strip_html(item.get("summary", "")),
+            "time": item.get("publishDate", ""),
+            "source": "东方财富研报",
+            "url": (
+                f"https://data.eastmoney.com/report/info/{info_code}.html"
+                if info_code
+                else ""
+            ),
+            "kind": "研报",
+        })
+    return articles
+
+
+#: Which feed to trust when the same story arrives from several.
+_NEWS_KIND_WEIGHT = {"公告": 0, "研报": 1, "新闻": 2}
+
+
+def _news_search_enabled() -> bool:
+    """Whether to spend a request on the East Money search feed.
+
+    It answers every parameter combination with a `passportWeb` stub and no
+    articles (verified 2026-09-27), so it is off by default: on it would cost a
+    throttled request per call and always contribute nothing. Kept behind a flag
+    so the path is still there if the endpoint starts serving results again.
+    """
+    return os.environ.get("MARVEL_ENABLE_EM_NEWS_SEARCH", "").strip().lower() in (
+        "1", "true", "yes",
+    )
+
+
+def _collect_stock_news(
+    code: str, start_date: str, end_date: str, *, limit: int = 80
+) -> tuple[list[dict], dict[str, int]]:
+    """Gather per-stock news from every source, then de-duplicate and rank.
+
+    Returns ``(articles, counts)`` where ``counts`` records how many items each
+    source contributed, so the caller can tell the reader where the list came
+    from — a short list from three healthy sources and a short list from one dead
+    source mean very different things.
+    """
+    counts: dict[str, int] = {}
+    collected: list[dict] = []
+
+    sources = (
+        ("公告", lambda: _fetch_news_announcements(code)),
+        ("研报", lambda: _fetch_news_research(code, start_date=start_date, end_date=end_date)),
+        ("新闻", lambda: _fetch_news_sina(code)),
+    )
+    if _news_search_enabled():
+        sources = sources + (("搜索", lambda: _fetch_news_eastmoney(code)),)
+
+    for label, fetch in sources:
+        try:
+            items = fetch() or []
+        except Exception as exc:  # noqa: BLE001 — one dead feed must not empty the list
+            logger.warning("news source %s failed for %s: %s", label, code, exc)
+            counts[label] = 0
+            continue
+        counts[label] = len(items)
+        collected.extend(items)
+
+    # De-duplicate: prefer the higher-signal kind, then the longer body.
+    best: dict[str, dict] = {}
+    for item in collected:
+        key = _news_dedup_key(item.get("title", ""))
+        if not key:
+            continue
+        item.setdefault("kind", "新闻")
+        current = best.get(key)
+        if current is None:
+            best[key] = item
+            continue
+        better = (
+            _NEWS_KIND_WEIGHT.get(item["kind"], 9),
+            -len(item.get("content") or ""),
+        ) < (
+            _NEWS_KIND_WEIGHT.get(current["kind"], 9),
+            -len(current.get("content") or ""),
+        )
+        if better:
+            # keep the loser's body if the winner has none
+            if not item.get("content") and current.get("content"):
+                item["content"] = current["content"]
+            best[key] = item
+        elif not current.get("content") and item.get("content"):
+            current["content"] = item["content"]
+
+    articles = list(best.values())
+    for item in articles:
+        item["pub_date"] = _parse_news_date(item.get("time", ""))
+
+    articles.sort(
+        key=lambda a: (
+            _NEWS_KIND_WEIGHT.get(a.get("kind", "新闻"), 9),
+            -(a["pub_date"].toordinal() if a.get("pub_date") else 0),
+        )
+    )
+    return articles[:limit], counts
 
 
 def _parse_news_date(value) -> date | None:
@@ -1898,36 +2126,39 @@ def get_news(
     start_date: Annotated[str, "Start date yyyy-mm-dd"],
     end_date: Annotated[str, "End date yyyy-mm-dd"],
 ) -> str:
-    """Get stock-specific news via East Money direct API (Sina as fallback)."""
+    """Get stock-specific news: announcements, broker research and press.
+
+    Three live feeds instead of one dead one. Until 2026-09-27 this called the
+    East Money search API as its primary source and silently fell back to Sina
+    when it returned nothing — and it *always* returned nothing (every parameter
+    combination answers with a `passportWeb` stub), so in practice the news
+    analyst only ever saw Sina's bare headlines with no body text. Announcements
+    and research reports are both dated, which also makes the window filter below
+    meaningful rather than decorative.
+    """
     code = _normalize_ticker(ticker)
 
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
-    articles: list[dict] = []
-    source_label = ""
+    articles, source_counts = _collect_stock_news(code, start_date, end_date)
 
-    try:
-        articles = _fetch_news_eastmoney(code)
-        source_label = "东方财富"
-    except Exception as e:
-        logger.warning("East Money news fetch failed for %s: %s", code, e)
+    source_line = "、".join(
+        f"{label} {n} 条" for label, n in source_counts.items() if n
+    ) or "各源均返回 0 条"
 
     if not articles:
-        try:
-            articles = _fetch_news_sina(code)
-            source_label = "新浪财经"
-        except Exception as e:
-            logger.warning("Sina news fetch failed for %s: %s", code, e)
-
-    if not articles:
-        return f"No news found for A-stock '{code}'"
+        return (
+            f"No news found for A-stock '{code}' between {start_date} and {end_date}. "
+            f"Sources queried: {source_line}."
+        )
 
     news_str = ""
     count = 0
     undated = 0
+    kind_counts: dict[str, int] = {}
     for art in articles:
-        pub_date = _parse_news_date(art.get("time", ""))
+        pub_date = art.get("pub_date") or _parse_news_date(art.get("time", ""))
         if pub_date is None:
             # 发布时间读不出来就丢弃。"读不出来" 不等于 "在窗口内"——旧代码在这里
             # `pass` 掉异常后照常收录，于是今天的新闻会被写进历史窗口的报告里。
@@ -1938,10 +2169,12 @@ def get_news(
 
         title = art["title"]
         content = art.get("content", "")
-        source = art.get("source", source_label)
+        source = art.get("source", "新闻")
+        kind = art.get("kind", "新闻")
         link = art.get("url", "")
 
-        news_str += f"### {title} (source: {source})\n"
+        # 标出来源类型：公告与研报是硬信息，新闻稿是软信息，读者/模型据此分配权重。
+        news_str += f"### [{kind}] {title} (source: {source})\n"
         if content:
             snippet = content[:300] + "..." if len(content) > 300 else content
             news_str += f"{snippet}\n"
@@ -1949,11 +2182,17 @@ def get_news(
             news_str += f"Link: {link}\n"
         news_str += "\n"
         count += 1
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+
+    source_line = "、".join(
+        f"{label} {n} 条" for label, n in source_counts.items() if n
+    ) or "各源均返回 0 条"
 
     if count == 0:
         parts = [
             f"No news found for A-stock '{code}' "
-            f"between {start_date} and {end_date}."
+            f"between {start_date} and {end_date}.",
+            f"Sources queried: {source_line}.",
         ]
         if undated:
             parts.append(
@@ -1961,18 +2200,23 @@ def get_news(
                 "date could not be read."
             )
         if _is_historical(end_date):
-            # 这两个端点只提供"最新"文章，"查不到" 与 "当时没有" 是两回事。
+            # 公告与研报本身按日期取数，可回溯；新闻稿只提供"最新"。
             parts.append(
-                "Note: the East Money / Sina news endpoints only serve the most "
-                "recent articles, so this window cannot be reconstructed "
-                "faithfully — read this as 'the source cannot look back', not "
-                "as 'no news existed on those dates'."
+                "Note: the press feed only serves the most recent articles, so a "
+                "historical window cannot be reconstructed faithfully from it — "
+                "read this as 'the source cannot look back', not as 'no news "
+                "existed on those dates'. Announcements and research reports are "
+                "queried by date and are not subject to that limitation."
             )
         return " ".join(parts)
 
     # 有内容返回时同样要说清被丢掉了什么——静默丢弃和多报一条一样糟：
     # 读者无从判断这份列表是不是完整。
     notes = []
+    detail = "、".join(f"{k} {v} 条" for k, v in sorted(kind_counts.items()))
+    notes.append(
+        f"> 来源：{source_line}；去重后落在窗口内 {count} 条（{detail}）。"
+    )
     if undated:
         notes.append(
             f"> ⚠️ {undated} article(s) were dropped because their publication "
@@ -1980,9 +2224,10 @@ def get_news(
         )
     if _is_historical(end_date):
         notes.append(
-            "> ⚠️ The East Money / Sina news endpoints only serve the most recent "
-            "articles; earlier items inside this window cannot be retrieved, so "
-            "the list below may be incomplete."
+            "> ⚠️ The press feed only serves the most recent articles; earlier "
+            "items inside this window cannot be retrieved from it, so the list "
+            "below may be incomplete. Announcements and research reports are "
+            "queried by date and are complete for the window."
         )
 
     header = f"## {code} (A-stock) News, from {start_date} to {end_date}:\n"

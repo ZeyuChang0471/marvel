@@ -128,14 +128,17 @@ class TestDataLayerClamp:
     def _stub_news(self, monkeypatch):
         import marvel.dataflows.a_stock as a_stock
 
-        monkeypatch.setattr(
-            a_stock,
-            "_fetch_news_eastmoney",
-            lambda code: [
-                {"title": "BEFORE", "time": "2026-05-10", "content": "known then"},
-                {"title": "AFTER", "time": "2026-08-01", "content": "the future"},
-            ],
-        )
+        def fake_announcements(code, **kwargs):
+            return [
+                {"title": "BEFORE", "time": "2026-05-10", "content": "known then",
+                 "kind": "公告", "source": "东方财富公告", "url": ""},
+                {"title": "AFTER", "time": "2026-08-01", "content": "the future",
+                 "kind": "公告", "source": "东方财富公告", "url": ""},
+            ]
+
+        monkeypatch.setattr(a_stock, "_fetch_news_announcements", fake_announcements)
+        monkeypatch.setattr(a_stock, "_fetch_news_research", lambda code, **k: [])
+        monkeypatch.setattr(a_stock, "_fetch_news_sina", lambda code, **k: [])
 
     def test_news_cannot_reach_past_the_analysis_date(self, monkeypatch, bound):
         """This is the exact back-test leak: the model asks for a window that

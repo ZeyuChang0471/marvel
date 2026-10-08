@@ -29,6 +29,46 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
+#: Field descriptions as written in the schema module, captured on first use so
+#: localization can be applied and *undone* — the schema classes are module-level
+#: singletons, and the CLI lets the user pick a language per run.
+_BASE_DESCRIPTIONS: dict[type, dict[str, str]] = {}
+
+
+def localize_schema(schema: type[T], language: Optional[str] = None) -> type[T]:
+    """Make a schema's field descriptions ask for the configured output language.
+
+    The schema docstring in ``agents/schemas.py`` says it outright: *"Field
+    descriptions double as the model's output instructions"*. They were written
+    entirely in English, so a provider that supports structured output (OpenAI,
+    DeepSeek, …) received English instructions for the three stages that produce
+    the decision, and the single ``Write your entire response in Chinese``
+    sentence appended to the prompt body was competing with them. That is why the
+    plan, the trader note and the final decision came back in English.
+
+    The English text is preserved as the base and the language clause is
+    appended, so switching languages between runs cannot stack clauses.
+    """
+    descriptions = _BASE_DESCRIPTIONS.setdefault(
+        schema, {name: (field.description or "") for name, field in schema.model_fields.items()}
+    )
+
+    if language is None:
+        try:
+            from marvel.dataflows.config import get_config
+
+            language = get_config().get("output_language", "Chinese")
+        except Exception:  # noqa: BLE001 — never block a run over a prompt nicety
+            language = "Chinese"
+
+    lang = str(language or "").strip()
+    clause = "" if not lang or lang.lower() == "english" else f" Write this field in {lang}."
+
+    for name, field in schema.model_fields.items():
+        base = descriptions.get(name, field.description or "")
+        field.description = base + clause
+    return schema
+
 
 def bind_structured(llm: Any, schema: type[T], agent_name: str) -> Optional[Any]:
     """Return ``llm.with_structured_output(schema)`` or ``None`` if unsupported.
@@ -36,6 +76,7 @@ def bind_structured(llm: Any, schema: type[T], agent_name: str) -> Optional[Any]
     Logs a warning when the binding fails so the user understands the agent
     will use free-text generation for every call instead of one-shot fallback.
     """
+    localize_schema(schema)
     try:
         return llm.with_structured_output(schema)
     except (NotImplementedError, AttributeError) as exc:

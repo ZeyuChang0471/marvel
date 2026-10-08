@@ -338,14 +338,20 @@ class TestHarnessHonoursTheAnalysisDate:
         import marvel.dataflows.a_stock as a_stock
         from marvel.agents.utils.agent_utils import get_news
 
-        monkeypatch.setattr(
-            a_stock,
-            "_fetch_news_eastmoney",
-            lambda code: [
-                {"title": "BEFORE", "time": "2026-05-10", "content": "known"},
-                {"title": "AFTER", "time": "2026-08-01", "content": "future"},
-            ],
-        )
+        # Announcements are the feed that is actually queried now; the old stub
+        # targeted the East Money search endpoint, which returns no articles at
+        # all and is disabled by default.
+        def fake_announcements(code, **kwargs):
+            return [
+                {"title": "BEFORE", "time": "2026-05-10", "content": "known",
+                 "kind": "公告", "source": "东方财富公告", "url": ""},
+                {"title": "AFTER", "time": "2026-08-01", "content": "future",
+                 "kind": "公告", "source": "东方财富公告", "url": ""},
+            ]
+
+        monkeypatch.setattr(a_stock, "_fetch_news_announcements", fake_announcements)
+        monkeypatch.setattr(a_stock, "_fetch_news_research", lambda code, **k: [])
+        monkeypatch.setattr(a_stock, "_fetch_news_sina", lambda code, **k: [])
         registry = ToolRegistry.from_tools([get_news])
         model = ScriptedModel([
             ModelReply(tool_calls=[ToolCall(

@@ -10,7 +10,7 @@ backtesting date fidelity（#475）。
 补不上就必须**说出来**，而不是静默把今天的数字当历史事实。
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -420,13 +420,16 @@ def test_news_drops_undated_articles(monkeypatch):
     """get_news 的同类缺陷：日期解析失败时旧代码 `pass` 后照常收录。"""
     monkeypatch.setattr(
         a_stock,
-        "_fetch_news_eastmoney",
-        lambda code: [
-            {"title": "无日期新闻", "content": "x", "time": "", "source": "东方财富"},
+        "_fetch_news_announcements",
+        lambda code, **kwargs: [
+            {"title": "无日期新闻", "content": "x", "time": "", "kind": "公告",
+             "source": "东方财富公告", "url": ""},
             {"title": "窗口内新闻", "content": "y", "time": f"{PAST} 10:00:00",
-             "source": "东方财富"},
+             "kind": "公告", "source": "东方财富公告", "url": ""},
         ],
     )
+    monkeypatch.setattr(a_stock, "_fetch_news_research", lambda code, **k: [])
+    monkeypatch.setattr(a_stock, "_fetch_news_sina", lambda code, **k: [])
 
     out = a_stock.get_news("600519", PAST, PAST)
 
@@ -498,26 +501,30 @@ def test_financial_report_drops_periods_after_the_analysis_date(monkeypatch):
     都把 curr_date 默认成 None —— 于是模型按 {"ticker": ...} 调用时守卫**静默失效**，
     直接返回最新 8 期。
     """
-    _fake_sina_report(
-        monkeypatch,
-        ["2026-03-31", "2026-06-30", "2026-09-30"],   # PAST = 90 天前
-    )
+    # Periods are derived from PAST, not hardcoded. Hardcoded ones only bracket
+    # "90 days ago" for a few weeks of the calendar and then fail on their own,
+    # which is exactly what happened.
+    just_before = (date.fromisoformat(PAST) - timedelta(days=1)).isoformat()
+    long_before = (date.fromisoformat(PAST) - timedelta(days=200)).isoformat()
+    just_after = (date.fromisoformat(PAST) + timedelta(days=1)).isoformat()
+    _fake_sina_report(monkeypatch, [long_before, just_before, just_after])
 
     df = a_stock._get_financial_report_sina("600519", "利润表", "quarterly", PAST)
 
-    assert list(df["报告日"].dt.strftime("%Y-%m-%d")) == ["2026-03-31"]
+    assert list(df["报告日"].dt.strftime("%Y-%m-%d")) == [long_before, just_before]
 
 
 def test_financial_report_cuts_at_market_date_when_curr_date_missing(monkeypatch):
     """curr_date 缺失时要退到"市场当天"，而不是干脆不裁。"""
     future = (a_stock._market_today() + timedelta(days=400)).isoformat()
-    _fake_sina_report(monkeypatch, ["2026-03-31", future])
+    past_period = (a_stock._market_today() - timedelta(days=200)).isoformat()
+    _fake_sina_report(monkeypatch, [past_period, future])
 
     df = a_stock._get_financial_report_sina("600519", "利润表", "quarterly", None)
 
     dates = list(df["报告日"].dt.strftime("%Y-%m-%d"))
     assert future not in dates, "curr_date 缺失不应等于放弃时点裁剪"
-    assert "2026-03-31" in dates
+    assert past_period in dates
 
 
 def test_financial_report_refuses_payload_without_a_date_column(monkeypatch):
