@@ -239,3 +239,6 @@ results/
 _ptmp/
 _upstream/
 _shim3/
+
+# 当 ~/.marvel 无法写入时（安全软件/权限拦截）MARVEL 的回退状态目录
+.marvel_state/

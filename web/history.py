@@ -35,23 +35,48 @@ def _results_dir() -> Path:
     return Path(DEFAULT_CONFIG["results_dir"]).expanduser()
 
 
+def _results_dirs() -> list[Path]:
+    """Every directory the history list should read.
+
+    `default_config` falls back to a writable directory when the configured one
+    refuses new files (a security product blocking `~/.marvel`, for instance). The
+    analyses saved *before* that fallback are still in the original directory, and
+    they must not silently vanish from the sidebar — writing to the new place while
+    reading only the new place is how a user concludes their history was deleted.
+    """
+    dirs = [_results_dir()]
+    legacy = DEFAULT_CONFIG.get("legacy_results_dir")
+    if legacy:
+        legacy_path = Path(legacy).expanduser()
+        if legacy_path not in dirs:
+            dirs.append(legacy_path)
+    return dirs
+
+
 def get_history() -> list[dict[str, str]]:
     """Scan saved analysis logs and return a sorted list (newest first).
 
     Each entry: {"ticker": "300750", "date": "2026-05-12", "path": "/abs/path/...json"}
     """
-    root = _results_dir()
-    if not root.exists():
-        return []
-
     entries: list[dict[str, str]] = []
-    for log_file in root.rglob("full_states_log_*.json"):
-        match = re.search(r"full_states_log_(\d{4}-\d{2}-\d{2})\.json$", log_file.name)
-        if not match:
+    seen: set[str] = set()
+
+    for root in _results_dirs():
+        if not root.exists():
             continue
-        date = match.group(1)
-        ticker = log_file.parent.parent.name
-        entries.append({"ticker": ticker, "date": date, "path": str(log_file)})
+        for log_file in root.rglob("full_states_log_*.json"):
+            match = re.search(r"full_states_log_(\d{4}-\d{2}-\d{2})\.json$", log_file.name)
+            if not match:
+                continue
+            key = str(log_file)
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append({
+                "ticker": log_file.parent.parent.name,
+                "date": match.group(1),
+                "path": key,
+            })
 
     entries.sort(key=lambda e: e["date"], reverse=True)
     return entries

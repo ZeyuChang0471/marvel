@@ -404,6 +404,17 @@ def render_sidebar() -> None:
     st.markdown("---")
     st.markdown("#### 历史记录")
 
+    # Say where reports are going when the configured directory had to be replaced.
+    # Otherwise the first question after a run is "我的报告去哪了？" — and a silent
+    # relocation is indistinguishable from data loss.
+    if DEFAULT_CONFIG.get("results_dir_fell_back"):
+        st.warning(
+            "⚠️ 默认输出目录（`~/.marvel`）无法新建文件，通常是安全软件或权限拦截。"
+            f"报告已改存到：`{DEFAULT_CONFIG['results_dir']}`。\n\n"
+            "想让报告回到原目录：把 `~/.marvel` 加入安全软件白名单，"
+            "或设置环境变量 `MARVEL_RESULTS_DIR` 指向一个可写目录。"
+        )
+
     history = _cached_history()
     if not history:
         st.caption("暂无历史记录")
