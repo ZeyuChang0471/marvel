@@ -21,9 +21,15 @@ from marvel.default_config import DEFAULT_CONFIG  # noqa: E402
 from web.components.progress_panel import render_progress  # noqa: E402
 from web.components.report_viewer import render_report  # noqa: E402
 from web.components.sidebar import render_sidebar, session_api_key  # noqa: E402
+from web.diagnostics import arm_stack_dumps  # noqa: E402
 from web.history import clear_incomplete_task, extract_signal, load_analysis  # noqa: E402
 from web.progress import ProgressTracker  # noqa: E402
 from web.runner import run_analysis_in_thread  # noqa: E402
+
+# Armed here rather than in web/launch.py: that module spawns this file as a *child*
+# process, and a dump armed in the parent would never show the child's frames.
+# Off unless MARVEL_WEB_DUMP_STACKS is set — see web/diagnostics.py.
+arm_stack_dumps()
 
 # ── Page config ──────────────────────────────────────────────────────────────
 

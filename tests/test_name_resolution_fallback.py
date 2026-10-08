@@ -19,6 +19,8 @@ The fallback is Tencent's smartbox endpoint, which answers over plain HTTPS:
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from marvel.dataflows import a_stock
@@ -42,6 +44,19 @@ def _hint(*entries: str) -> str:
 
 
 HENG = r"sh~600487~\u4ea8\u901a\u5149\u7535~htgd~GP-A"
+
+
+@pytest.fixture(autouse=True)
+def _clean_module_caches(monkeypatch):
+    """Isolate the module-level map caches between tests.
+
+    `_build_name_code_map` now remembers failures for a cooldown window, and the
+    maps themselves are module globals; without this, one test's cached failure
+    would answer the next test's call.
+    """
+    monkeypatch.setattr(a_stock, "_name_map_failure", None)
+    monkeypatch.setattr(a_stock, "_name_map_failed_until", 0.0)
+    yield
 
 
 @pytest.fixture
@@ -203,6 +218,84 @@ class TestFailureMessageQuality:
         message = str(excinfo.value)
         assert "6 位股票代码" in message
         assert "在线名称查询" in message
+
+
+@pytest.mark.unit
+class TestAFailedMapBuildIsRemembered:
+    """回归：失败不被记住时，每次重试都要再等 200 多秒。
+
+    实测日志里同一个进程反复打印 `mootdx stocks 耗时 209~259s`——因为建表失败既没写
+    内存缓存也没写磁盘缓存，而 Web UI 会一次次走到这里。这才是「界面像死了」的直接来源。
+    """
+
+    def _counting_boom(self, monkeypatch):
+        calls = {"n": 0}
+
+        def boom(*args, **kwargs):
+            calls["n"] += 1
+            raise RuntimeError("通达信不可达。")
+
+        monkeypatch.setattr(a_stock, "_mootdx_call", boom)
+        monkeypatch.setattr(a_stock, "_load_name_map_from_disk", lambda: None)
+        monkeypatch.setattr(a_stock, "_name_to_code", None)
+        monkeypatch.setattr(a_stock, "_code_to_name", None)
+        return calls
+
+    def test_the_probe_runs_once_within_the_cooldown(self, monkeypatch):
+        calls = self._counting_boom(monkeypatch)
+
+        for _ in range(4):
+            with pytest.raises(ValueError):
+                a_stock._build_name_code_map()
+
+        assert calls["n"] == 1, (
+            f"冷却期内又重探了 {calls['n'] - 1} 次——每次两百多秒，界面就是这么卡死的"
+        )
+
+    def test_the_fast_fail_repeats_the_original_reason(self, monkeypatch):
+        self._counting_boom(monkeypatch)
+
+        with pytest.raises(ValueError) as first:
+            a_stock._build_name_code_map()
+        with pytest.raises(ValueError) as second:
+            a_stock._build_name_code_map()
+
+        assert str(first.value) == str(second.value)
+        assert "。。" not in str(second.value)
+
+    def test_it_probes_again_once_the_cooldown_expires(self, monkeypatch):
+        calls = self._counting_boom(monkeypatch)
+        with pytest.raises(ValueError):
+            a_stock._build_name_code_map()
+
+        monkeypatch.setattr(
+            a_stock, "_name_map_failed_until", time.time() - 1
+        )
+        with pytest.raises(ValueError):
+            a_stock._build_name_code_map()
+
+        assert calls["n"] == 2, "冷却期过了应该允许再试一次"
+
+    def test_a_successful_build_clears_the_failure(self, monkeypatch):
+        import pandas as pd
+
+        monkeypatch.setattr(a_stock, "_load_name_map_from_disk", lambda: None)
+        monkeypatch.setattr(a_stock, "_save_name_map_to_disk", lambda *a: None)
+        monkeypatch.setattr(a_stock, "_name_to_code", None)
+        monkeypatch.setattr(a_stock, "_code_to_name", None)
+        monkeypatch.setattr(a_stock, "_name_map_failure", "旧错误")
+        monkeypatch.setattr(a_stock, "_name_map_failed_until", time.time() + 1000)
+        monkeypatch.setattr(a_stock, "_name_map_failure", None)  # 让本次真的去建表
+
+        monkeypatch.setattr(
+            a_stock, "_mootdx_call",
+            lambda *a, **k: pd.DataFrame({"code": ["600487"], "name": ["亨通光电"]}),
+        )
+
+        n2c, _ = a_stock._build_name_code_map()
+
+        assert n2c["亨通光电"] == "600487"
+        assert a_stock._name_map_failure is None, "成功之后必须清掉失败状态"
 
 
 @pytest.mark.unit

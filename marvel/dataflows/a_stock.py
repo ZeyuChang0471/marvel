@@ -196,16 +196,26 @@ def _build_name_code_map() -> tuple[dict[str, str], dict[str, str]]:
     """Build name→code and code→name maps (both SH & SZ markets).
 
     Served from the on-disk cache while it is fresh: building it needs mootdx,
-    and when the Tongdaxin TCP port is unreachable that costs roughly 80
-    seconds of serial server probing (see ``_get_mootdx_client``).
+    and when the Tongdaxin TCP port is unreachable that costs 80–260 seconds of
+    serial server probing (see ``_get_mootdx_client``).
+
+    A failed build is remembered for :data:`_NAME_MAP_FAILURE_COOLDOWN_S`. Without
+    that, every caller re-ran the whole probe: the Web UI's log showed the same
+    process reporting ``mootdx stocks 耗时 209~259s`` over and over, which is what
+    turned "the map is unavailable" into "the app is permanently wedged".
     """
-    global _name_to_code, _code_to_name
+    global _name_to_code, _code_to_name, _name_map_failure, _name_map_failed_until
     if _name_to_code is not None:
         return _name_to_code, _code_to_name
+
+    if _name_map_failure and time.time() < _name_map_failed_until:
+        # Fast-fail with the original reason; do not re-probe.
+        raise ValueError(_name_map_failure)
 
     cached = _load_name_map_from_disk()
     if cached is not None:
         _name_to_code, _code_to_name = cached
+        _name_map_failure = None
         logger.info("Loaded stock name-code map from cache: %d entries", len(cached[0]))
         return _name_to_code, _code_to_name
 
@@ -229,13 +239,15 @@ def _build_name_code_map() -> tuple[dict[str, str], dict[str, str]]:
         # 网络抖动/通达信不可达时给出明确提示，而非冒泡成风马牛不相及的报错（#46/#66）。
         # `str(e)` 自己就以「。」结尾，直接拼接会出现「。。」——先去掉尾部的标点。
         detail = str(e).strip().rstrip("。.")
-        raise ValueError(
-            f"无法通过 mootdx 解析股票名称（通达信服务暂时不可达）：{detail} "
-            "接下来会尝试腾讯的在线名称查询。"
-        ) from e
+        _name_map_failure = (
+            f"无法通过 mootdx 解析股票名称（通达信服务暂时不可达）：{detail}"
+        )
+        _name_map_failed_until = time.time() + _NAME_MAP_FAILURE_COOLDOWN_S
+        raise ValueError(_name_map_failure) from e
 
     _name_to_code = n2c
     _code_to_name = c2n
+    _name_map_failure = None
     _save_name_map_to_disk(n2c, c2n)
     logger.info("Built stock name-code map: %d entries", len(n2c))
     return _name_to_code, _code_to_name
@@ -470,6 +482,13 @@ _TDX_CANARY_SYMBOL = "600519"
 # 放大成"每个请求卡几十秒"。
 _MOOTDX_RETRY_AFTER_S = 300.0
 _mootdx_unavailable_until = 0.0
+
+#: 建全市场映射表失败后的冷却期（秒）。失败必须被记住：实测日志里同一个进程反复
+#: 打印「mootdx stocks 耗时 209~259s」——每次调用都把两百多秒的重探重来一遍，
+#: 这才是「界面像死了一样」的直接来源。冷却期内直接抛原来的错，不再重探。
+_NAME_MAP_FAILURE_COOLDOWN_S = 300.0
+_name_map_failure: str | None = None
+_name_map_failed_until = 0.0
 
 # ⚠️ 曾经加过「连续 N 台协议失败就停手」的提前退出，已移除：三台远端拒绝**证明不了**
 # 本地网络封了协议，而列表里靠后的服务器完全可能是好的。提前收手会让那台可用服务器
