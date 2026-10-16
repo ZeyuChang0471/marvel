@@ -154,6 +154,33 @@ class TestSourceAdapters:
         assert len(items) == 9
         assert all(i["content"] == "" for i in items)  # press feed has no bodies
 
+    def test_page_two_is_not_thrown_away(self, monkeypatch):
+        """抓了两页却只留 40 条 = 第二页白抓（每页本来就有 40 条）。"""
+
+        class FakeSina:
+            encoding = "gb2312"
+
+            def __init__(self, text):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, **kwargs):
+            page = url.rsplit("Page=", 1)[-1]
+            rows = "".join(
+                f"2026-09-20&nbsp;10:{i:02d}&nbsp;<a href='http://x/{page}{i}'>第{page}页第{i}条</a>\n"
+                for i in range(40)
+            )
+            return FakeSina(rows)
+
+        monkeypatch.setattr(a_stock._requests, "get", fake_get)
+
+        items = a_stock._fetch_news_sina("600487", pages=2, page_size=40)
+
+        assert len(items) == 80, "第二页被 page_size 截掉了"
+        assert any("第2页" in i["title"] for i in items)
+
     def test_a_page_with_no_rows_stops_the_walk(self, monkeypatch):
         calls: list[str] = []
 
@@ -330,3 +357,362 @@ class TestGetNewsContract:
 
         assert "No news found" in out
         assert "Sources queried" in out, "空结果也要说清查过哪些源"
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-16 repairs: window-aware announcements, bodies, provenance labels
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestAnnouncementWindow:
+    """公告必须「按窗口问源」，而不是「取最新一页再本地过滤」。
+
+    实测（2026-10-16）：600487 在 2026-05 窗口下，旧实现返回 0 条公告——
+    因为最新 30 条全是 9 月的；带 begin_time/end_time 问同一个接口，同一窗口
+    返回 20 条。这就是「历史复盘经常取不到消息」的主因之一。
+    """
+
+    @staticmethod
+    def _capture(monkeypatch, pages):
+        calls: list[dict] = []
+
+        def fake_get(url, params=None, **kwargs):
+            calls.append(dict(params or {}))
+            page = int((params or {}).get("page_index", "1"))
+            return _FakeResponse({"data": {"list": pages.get(page, [])}})
+
+        monkeypatch.setattr(a_stock, "_em_get", fake_get)
+        return calls
+
+    @staticmethod
+    def _page(n, prefix="t"):
+        return [
+            {"title": f"{prefix}{i}", "notice_date": "2026-05-10 00:00:00",
+             "art_code": f"AN{prefix}{i}"}
+            for i in range(n)
+        ]
+
+    def test_the_window_is_sent_to_the_source(self, monkeypatch):
+        calls = self._capture(monkeypatch, {})
+        a_stock._fetch_news_announcements(
+            "600487", start_date="2026-05-01", end_date="2026-05-31"
+        )
+        assert calls[0]["begin_time"] == "2026-05-01"
+        assert calls[0]["end_time"] == "2026-05-31"
+
+    def test_a_window_walks_pages_until_a_short_page(self, monkeypatch):
+        calls = self._capture(monkeypatch, {1: self._page(30, "a"), 2: self._page(30, "b"),
+                                            3: self._page(4, "c"), 4: self._page(9, "d")})
+        items = a_stock._fetch_news_announcements(
+            "600487", start_date="2026-05-01", end_date="2026-05-31"
+        )
+        assert [c["page_index"] for c in calls] == ["1", "2", "3"]
+        assert len(items) == 64, "翻页结果没有合并"
+
+    def test_the_page_walk_is_bounded(self, monkeypatch):
+        monkeypatch.setenv("MARVEL_NEWS_ANNOUNCEMENT_PAGES", "2")
+        calls = self._capture(monkeypatch, {1: self._page(30), 2: self._page(30), 3: self._page(30)})
+        a_stock._fetch_news_announcements(
+            "600487", start_date="2026-05-01", end_date="2026-05-31",
+            max_pages=a_stock._news_announcement_pages(),
+        )
+        assert len(calls) == 2, "翻页没有上界，长窗口可能变成爬虫"
+
+    def test_the_collector_passes_the_window_and_the_page_budget(self, monkeypatch):
+        monkeypatch.setenv("MARVEL_NEWS_ANNOUNCEMENT_PAGES", "4")
+        seen: dict = {}
+
+        def fake_announcements(code, **kwargs):
+            seen.update(kwargs)
+            return []
+
+        monkeypatch.setattr(a_stock, "_fetch_news_announcements", fake_announcements)
+        monkeypatch.setattr(a_stock, "_fetch_news_research", lambda code, **k: [])
+        monkeypatch.setattr(a_stock, "_fetch_news_sina", lambda code, **k: [])
+
+        a_stock._collect_stock_news("600487", "2026-05-01", "2026-05-31")
+
+        assert seen["start_date"] == "2026-05-01"
+        assert seen["end_date"] == "2026-05-31"
+        assert seen["max_pages"] == 4
+
+    def test_without_a_window_only_one_page_is_asked(self, monkeypatch):
+        calls = self._capture(monkeypatch, {1: self._page(30), 2: self._page(30)})
+        a_stock._fetch_news_announcements("600487")
+        assert len(calls) == 1, "无窗口时应当保持单页请求（旧行为）"
+
+    def test_art_code_is_carried_for_the_body_endpoint(self, monkeypatch):
+        self._capture(monkeypatch, {1: [{"title": "x", "notice_date": "2026-05-10", "art_code": "AN9"}]})
+        items = a_stock._fetch_news_announcements(
+            "600487", start_date="2026-05-01", end_date="2026-05-31"
+        )
+        assert items[0]["art_code"] == "AN9"
+
+
+@pytest.mark.unit
+class TestAnnouncementBodies:
+    """公告正文：标题只能说「出事了」，正文才是「说了什么」。"""
+
+    @staticmethod
+    def _article(art_code, when, kind="公告"):
+        return {
+            "title": f"公告{art_code}", "kind": kind, "time": when, "content": "",
+            "source": "东方财富公告", "url": "", "art_code": art_code,
+            "pub_date": a_stock._parse_news_date(when),
+        }
+
+    def test_a_windowed_announcement_gets_its_body(self, monkeypatch):
+        seen: dict = {}
+
+        def fake_get(url, params=None, **kwargs):
+            seen["url"] = url
+            seen["params"] = dict(params or {})
+            return _FakeResponse({"data": {"notice_content": "证券代码：600487\n\n本公司董事会……"}})
+
+        monkeypatch.setattr(a_stock, "_em_get", fake_get)
+        articles = [self._article("AN1", "2026-05-10 00:00:00")]
+
+        fetched = a_stock._enrich_announcement_bodies(articles, "2026-05-01", "2026-05-31")
+
+        assert fetched == 1
+        assert "本公司董事会" in articles[0]["content"]
+        assert seen["params"]["art_code"] == "AN1"
+        assert "cnotice" in seen["url"]
+
+    def test_the_body_is_capped(self, monkeypatch):
+        monkeypatch.setattr(a_stock, "_em_get",
+                            lambda *a, **k: _FakeResponse({"data": {"notice_content": "长" * 5000}}))
+        articles = [self._article("AN1", "2026-05-10 00:00:00")]
+
+        a_stock._enrich_announcement_bodies(articles, "2026-05-01", "2026-05-31")
+
+        assert len(articles[0]["content"]) < 1500
+        assert articles[0]["content"].endswith("（正文已截断）")
+
+    def test_the_env_limit_bounds_how_many_bodies_are_fetched(self, monkeypatch):
+        monkeypatch.setenv("MARVEL_NEWS_BODY_LIMIT", "1")
+        calls: list[str] = []
+
+        def fake_get(url, params=None, **kwargs):
+            calls.append(params.get("art_code"))
+            return _FakeResponse({"data": {"notice_content": "正文"}})
+
+        monkeypatch.setattr(a_stock, "_em_get", fake_get)
+        articles = [self._article("AN1", "2026-05-10 00:00:00"),
+                    self._article("AN2", "2026-05-11 00:00:00")]
+
+        a_stock._enrich_announcement_bodies(articles, "2026-05-01", "2026-05-31")
+
+        assert calls == ["AN1"], "条数上限没有生效"
+
+    def test_zero_disables_body_fetching(self, monkeypatch):
+        monkeypatch.setenv("MARVEL_NEWS_BODY_LIMIT", "0")
+        monkeypatch.setattr(a_stock, "_em_get",
+                            lambda *a, **k: pytest.fail("limit=0 时不应发起请求"))
+        articles = [self._article("AN1", "2026-05-10 00:00:00")]
+        assert a_stock._enrich_announcement_bodies(articles, "2026-05-01", "2026-05-31") == 0
+
+    def test_a_failing_body_does_not_break_the_list(self, monkeypatch):
+        def boom(*args, **kwargs):
+            raise RuntimeError("正文接口挂了")
+
+        monkeypatch.setattr(a_stock, "_em_get", boom)
+        articles = [self._article("AN1", "2026-05-10 00:00:00")]
+
+        assert a_stock._enrich_announcement_bodies(articles, "2026-05-01", "2026-05-31") == 0
+        assert articles[0]["content"] == "", "正文失败被写进了假内容"
+
+    def test_out_of_window_items_are_not_enriched(self, monkeypatch):
+        monkeypatch.setattr(a_stock, "_em_get",
+                            lambda *a, **k: pytest.fail("窗口外的公告不应抓正文"))
+        articles = [self._article("AN1", "2026-07-10 00:00:00")]
+        assert a_stock._enrich_announcement_bodies(articles, "2026-05-01", "2026-05-31") == 0
+
+
+@pytest.mark.unit
+class TestProvenanceMarkers:
+    """「未经交叉验证」必须是一等标记，而不是靠读者猜。"""
+
+    def _stub(self, monkeypatch, *, announcements=(), press=()):
+        def item(title, kind, when):
+            return {"title": title, "kind": kind, "time": when,
+                    "content": "", "source": kind, "url": ""}
+
+        monkeypatch.setattr(a_stock, "_fetch_news_announcements",
+                            lambda code, **k: [item(*a) for a in announcements])
+        monkeypatch.setattr(a_stock, "_fetch_news_research", lambda code, **k: [])
+        monkeypatch.setattr(a_stock, "_fetch_news_sina",
+                            lambda code, **k: [item(*a) for a in press])
+
+    def test_a_story_from_two_feeds_is_counted_as_corroborated(self, monkeypatch):
+        self._stub(
+            monkeypatch,
+            announcements=[("亨通光电:关于回购的公告", "公告", "2026-09-20")],
+            press=[("江苏亨通光电股份有限公司 关于回购的公告", "新闻", "2026-09-20")],
+        )
+
+        articles, _ = a_stock._collect_stock_news("600487", "2026-08-01", "2026-09-27")
+
+        assert len(articles) == 1
+        assert articles[0]["corroboration"] == 2
+        assert articles[0]["corroborating_kinds"] == ["公告", "新闻"]
+
+    def test_a_single_source_story_stays_at_one(self, monkeypatch):
+        self._stub(monkeypatch, press=[("某媒体独家爆料", "新闻", "2026-09-20")])
+
+        articles, _ = a_stock._collect_stock_news("600487", "2026-08-01", "2026-09-27")
+
+        assert articles[0]["corroboration"] == 1
+
+    def test_get_news_prints_the_label_and_warns(self, monkeypatch):
+        def fake_collect(code, start, end, **kwargs):
+            return [
+                {"title": "多源消息", "kind": "公告", "time": "2026-09-20",
+                 "content": "", "source": "东方财富公告", "url": "",
+                 "pub_date": a_stock._parse_news_date("2026-09-20"),
+                 "corroboration": 2, "corroborating_kinds": ["公告", "新闻"]},
+                {"title": "独家爆料", "kind": "新闻", "time": "2026-09-21",
+                 "content": "", "source": "新浪财经", "url": "",
+                 "pub_date": a_stock._parse_news_date("2026-09-21"),
+                 "corroboration": 1, "corroborating_kinds": ["新闻"]},
+            ], {"公告": 1, "新闻": 1}
+
+        monkeypatch.setattr(a_stock, "_collect_stock_news", fake_collect)
+
+        out = a_stock.get_news("600487", "2026-09-01", "2026-09-27")
+
+        assert "多源印证：公告、新闻" in out
+        assert "单一来源，未经交叉验证" in out
+        assert "1 条为单一来源" in out, "没有把「有几条未核实」告诉读者"
+
+    def test_the_news_analyst_is_told_how_to_use_the_labels(self):
+        import inspect
+
+        from marvel.agents.analysts import news_analyst
+
+        source = inspect.getsource(news_analyst)
+        assert "单一来源，未经交叉验证" in source
+        assert "多源印证" in source
+
+
+@pytest.mark.unit
+class TestGlobalNewsSources:
+    """全球快讯：CLS 旧端点是死的（404 HTML），必须换到 v1 并带上签名。"""
+
+    @staticmethod
+    def _em_stub(monkeypatch, items=()):
+        def fake_em(url, params=None, **kwargs):
+            return _FakeResponse({"data": {"fastNewsList": list(items)}})
+
+        monkeypatch.setattr(a_stock, "_em_get", fake_em)
+
+    def test_cls_uses_the_live_endpoint_and_is_signed(self, monkeypatch):
+        seen: dict = {}
+
+        class FakeResp:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"errno": 0, "data": {"roll_data": [
+                    {"title": "央行公告", "content": "正文", "ctime": 1770000000},
+                ]}}
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            seen.setdefault("urls", []).append(url)
+            if "cls.cn" in url:
+                seen["params"] = dict(params or {})
+            return FakeResp()
+
+        self._em_stub(monkeypatch)
+        monkeypatch.setattr(a_stock._requests, "get", fake_get)
+
+        a_stock.get_global_news("2026-05-12", 7, 10)
+
+        assert seen["urls"][0].endswith("/v1/roll/get_roll_list")
+        assert seen["params"]["app"] == "CailianpressWeb"
+        assert len(seen["params"]["sign"]) == 32
+
+    def test_all_three_wires_are_queried(self, monkeypatch):
+        seen: list[str] = []
+
+        class FakeResp:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"errno": 0, "data": {"roll_data": []}, "result": {"data": {"feed": {"list": []}}}}
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            seen.append(url)
+            return FakeResp()
+
+        self._em_stub(monkeypatch)
+        monkeypatch.setattr(a_stock._requests, "get", fake_get)
+
+        a_stock.get_global_news("2026-05-12", 7, 10)
+
+        assert any("cls.cn" in u for u in seen)
+        assert any("zhibo.sina.com.cn" in u for u in seen)
+
+    def test_no_single_wire_can_fill_the_quota(self, monkeypatch):
+        """实测：CLS 先返回 10 条，按顺序截断后东财/新浪一条都进不了报告。"""
+
+        class FakeResp:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            if "cls.cn" in url:
+                return FakeResp({"data": {"roll_data": [
+                    {"title": f"CLS{i}", "content": "x", "ctime": 1792000000} for i in range(5)
+                ]}})
+            return FakeResp({"result": {"data": {"feed": {"list": [
+                {"rich_text": f"SINA{i}", "create_time": "2026-10-16 09:0%d:00" % i}
+                for i in range(5)
+            ]}}}})
+
+        def fake_em(url, params=None, **kwargs):
+            return FakeResp({"data": {"fastNewsList": [
+                {"title": f"EM{i}", "summary": "x", "showTime": "2026-10-16 09:00:00"}
+                for i in range(5)
+            ]}})
+
+        monkeypatch.setattr(a_stock._requests, "get", fake_get)
+        monkeypatch.setattr(a_stock, "_em_get", fake_em)
+
+        out = a_stock.get_global_news("2026-10-16", 7, 6)
+
+        assert "CLS" in out and "EM" in out and "SINA" in out, out[:400]
+        assert "来源：" in out
+
+    def test_a_dead_cls_still_leaves_the_other_wires(self, monkeypatch):
+        class FakeResp:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"result": {"data": {"feed": {"list": []}}}}
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            if "cls.cn" in url:
+                raise RuntimeError("CLS 挂了")
+            return FakeResp()
+
+        self._em_stub(monkeypatch, items=[{
+            "title": "东财快讯", "summary": "摘要",
+            "showTime": "2026-05-12 09:00:00",
+        }])
+        monkeypatch.setattr(a_stock._requests, "get", fake_get)
+
+        out = a_stock.get_global_news("2026-05-12", 7, 10)
+
+        assert "东财快讯" in out
+        assert "N/A" not in out

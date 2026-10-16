@@ -165,3 +165,30 @@ class TestRiskDebateInjection:
         assert "VOLPRICE_BODY" in llm.prompt
         assert "MACRO_BODY" in llm.prompt
         assert "PLAN_BODY" in llm.prompt
+
+
+class TestDebatersPreserveProvenanceLabels:
+    """去极化的最小一步：辩论者不许把「未经交叉验证」的说法升级成事实。
+
+    DEBATE_POLARIZATION_AUDIT.md 的结论是「唯一确定性的防火墙 = 辩手不复述」。
+    既然挡不住模型复述，至少要求它复述时**保留不确定性标注**，并且不许把单条
+    未核实消息当作改变结论的唯一依据。
+    """
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("factory", [create_bull_researcher, create_bear_researcher])
+    def test_the_prompt_names_both_labels(self, factory):
+        llm = _FakeLLM()
+        factory(llm)(_investment_state(0))
+
+        assert "单一来源，未经交叉验证" in llm.prompt
+        assert "多源印证" in llm.prompt
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("factory", [create_bull_researcher, create_bear_researcher])
+    def test_the_prompt_forbids_the_single_rumour_drive(self, factory):
+        llm = _FakeLLM()
+        factory(llm)(_investment_state(0))
+
+        lowered = llm.prompt
+        assert "never let a single unverified rumour be the sole basis" in lowered

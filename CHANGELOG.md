@@ -41,6 +41,26 @@ Breaking changes within the 0.x line are called out explicitly.
   「C/D/F 的报告要降低依赖」。
 - 评级正则加词边界，`operating margin: 25%` 不再被当成 `rating` 标签。
 
+### Fixed — 消息获取（2026-10-17，全部联网实测）
+
+- **历史窗口取不到公告**（最要命的一条）。`_fetch_news_announcements` 原先取「最新 30 条」
+  再本地过滤，任何比这 30 条更早的窗口都得到 **0 条**——实测 600487 的 2026-05 窗口
+  空手而归，而同一个接口带 `begin_time`/`end_time` 问，返回 20 条。现在窗口随请求下发，
+  并按页翻到源返回不满一页（默认最多 3 页，`MARVEL_NEWS_ANNOUNCEMENT_PAGES`）。
+  实测：同一窗口 0 → 19 条。
+- **公告只有标题**。新增公告正文抓取（`np-cnotice-stock` 内容接口），窗口内最新
+  `MARVEL_NEWS_BODY_LIMIT`（默认 5）条带正文，单条截到 1200 字符；正文失败不影响列表。
+- **财联社源其实早就死了**。旧端点 `nodeapi/telegraphList` 现在返回 404 HTML，
+  被 JSON 解析吞成一条 warning，于是 `get_global_news` 只剩东财一个源。改用
+  `v1/roll/get_roll_list` + 网页端签名，并新增新浪 7×24 作第三源；展示按源轮流取，
+  先返回的源不再占满配额（实测 10 条 = CLS 4 + 东财 3 + 新浪 3）。
+- **新浪个股新闻第 2 页被丢掉**：抓了两页却 `[:page_size]` 只留一页；上限改为
+  「页数 × 每页条数」。同时正则接受单双引号 href。
+- **每条消息标出「几个源印证过」**：去重时统计来源种类，输出标
+  「多源印证：…」或「单一来源，未经交叉验证」，并汇总「N 条为单一来源」。
+  新闻分析师与多空辩手被要求保留该标注、不得把未证实说法当作事实
+  （去极化的上游一半，见 `DEBATE_POLARIZATION_AUDIT.md` §5）。
+
 ### Fixed — 未来函数（历史复盘里混进今天的数字）
 
 - **`get_global_news` 真正按发布时间裁剪**。原先算出了窗口却只把它打进标题字符串，正文

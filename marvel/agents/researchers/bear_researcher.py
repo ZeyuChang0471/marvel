@@ -56,6 +56,8 @@ Last bull argument: {current_response}
 
 ⚠️ If the data quality assessment flags any report as low-confidence (grade C/D/F), reduce your reliance on that report and note the data limitation in your argument.
 
+Evidence discipline: news items arrive tagged 「多源印证」(carried by several independent feeds) or 「单一来源，未经交叉验证」(single-source, unverified). When you cite an unverified item, keep its label and treat it as a claim, not a fact — never restate it as confirmed, and never let a single unverified rumour be the sole basis for changing the investment conclusion.
+
 Deliver a compelling bear argument grounded in A-share market realities. Refute the bull's claims and demonstrate the risks of investing in this stock within the Chinese regulatory and market structure.{get_language_instruction()}
 """
 

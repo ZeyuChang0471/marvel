@@ -363,7 +363,7 @@ else:
                 line-height: 1.6;
                 border-top: 1px solid #1a1a1a;
             ">
-                MARVEL · 张泽宇（zzy）维护 · fork of simonlin1212/TradingAgents-Astock<br>
+                MARVEL · 项目维护 · fork of simonlin1212/TradingAgents-Astock<br>
                 Multi-Agent Research &amp; Valuation Engine for Long-short
             </div>
         </div>

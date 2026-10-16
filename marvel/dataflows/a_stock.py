@@ -18,6 +18,7 @@ from typing import Annotated
 from datetime import date, datetime, time as _dtime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
 import contextlib
+import hashlib
 import json as _json
 import os
 import logging
@@ -29,6 +30,7 @@ import threading
 import time
 import uuid
 import urllib.request
+import urllib.parse
 
 import pandas as pd
 import requests as _requests
@@ -1914,9 +1916,11 @@ def _fetch_news_sina(code: str, pages: int = 2, page_size: int = 40) -> list[dic
         resp.raise_for_status()
         resp.encoding = "gb2312"
 
+        # 单双引号都收：页面哪天把 href='...' 换成 href="..."，静默返回 0 条
+        # 比报错难查得多。
         rows = _re.findall(
             r"(\d{4}-\d{2}-\d{2})\s*(?:&nbsp;)*(\d{2}:\d{2})\s*(?:&nbsp;)*"
-            r"<a[^>]+href='([^']+)'[^>]*>([^<]+)</a>",
+            r"""<a[^>]+href=['"]([^'"]+)['"][^>]*>([^<]+)</a>""",
             resp.text,
         )
         if not rows:
@@ -1935,7 +1939,9 @@ def _fetch_news_sina(code: str, pages: int = 2, page_size: int = 40) -> list[dic
                 "kind": "新闻",
             })
 
-    return articles[:page_size]
+    # 抓了 N 页却只留 page_size 条 = 第 2 页之后全部被丢掉（每页本来就是
+    # page_size 条）。上限要按页数算，否则「读了两页」只是一句注释。
+    return articles[: max(1, pages) * page_size]
 
 
 _NEWS_DATE_RE = _re.compile(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})")
@@ -1979,43 +1985,165 @@ def _news_dedup_key(title: str) -> str:
     return normalised[-24:] if len(normalised) > 24 else normalised
 
 
-def _fetch_news_announcements(code: str, page_size: int = 30) -> list[dict]:
+def _fetch_news_announcements(
+    code: str,
+    page_size: int = 30,
+    start_date: str = "",
+    end_date: str = "",
+    max_pages: int = 3,
+) -> list[dict]:
     """Company announcements (公告) via East Money — the highest-signal feed.
 
     Announcements are what actually moves an A-share: 减持/增持, 立案调查, 业绩预告,
-    解禁, 股权质押. They are also the one per-stock feed that is *dated and
-    paginated by the source*, so a historical window can be reconstructed far more
-    faithfully than from a "latest news" list.
+    解禁, 股权质押. Two properties matter, and both were wrong until 2026-10-16:
+
+    * **The window goes to the source.** The feed is paginated newest-first, so
+      "fetch the newest 30 rows and filter locally" answered *nothing at all* for
+      any window older than those rows — a May 2026 window on 600487 came back
+      empty while the same endpoint returns twenty May items when asked with
+      ``begin_time``/``end_time`` (verified live). Server-side filtering is also
+      what keeps the point-in-time promise: a window that ends on the analysis
+      date cannot return anything newer.
+    * **A full page means "keep going".** A long window on a busy stock spans
+      several pages; stopping at page one silently truncated the list. The page
+      count is bounded, so one tool call can never turn into a crawl.
     """
     url = "https://np-anotice-stock.eastmoney.com/api/security/ann"
-    params = {
-        "sr": "-1",              # newest first
-        "page_size": str(page_size),
-        "page_index": "1",
-        "ann_type": "A",
-        "client_source": "web",
-        "stock_list": code,
-    }
-    response = _em_get(url, params=params, timeout=15)
-    response.raise_for_status()
-    payload = response.json()
-
     articles: list[dict] = []
-    for item in (payload.get("data") or {}).get("list") or []:
-        art_code = item.get("art_code", "")
-        articles.append({
-            "title": _strip_html(item.get("title", "")),
-            "content": "",
-            "time": item.get("notice_date", "") or item.get("display_time", ""),
-            "source": "东方财富公告",
-            "url": (
-                f"https://data.eastmoney.com/notices/detail/{code}/{art_code}.html"
-                if art_code
-                else ""
-            ),
-            "kind": "公告",
-        })
+
+    # No window: one page (the old shape). With a window: walk pages until the
+    # source returns a short page, which is its "no more rows" signal (verified:
+    # a window with 20 items answers 20 then 0).
+    pages = max(1, max_pages) if (start_date or end_date) else 1
+    for page in range(1, pages + 1):
+        params = {
+            "sr": "-1",              # newest first
+            "page_size": str(page_size),
+            "page_index": str(page),
+            "ann_type": "A",
+            "client_source": "web",
+            "stock_list": code,
+        }
+        if start_date:
+            params["begin_time"] = str(start_date)[:10]
+        if end_date:
+            params["end_time"] = str(end_date)[:10]
+
+        response = _em_get(url, params=params, timeout=15)
+        response.raise_for_status()
+        payload = response.json()
+        items = (payload.get("data") or {}).get("list") or []
+
+        for item in items:
+            art_code = item.get("art_code", "")
+            articles.append({
+                "title": _strip_html(item.get("title", "")),
+                "content": "",
+                "time": item.get("notice_date", "") or item.get("display_time", ""),
+                "source": "东方财富公告",
+                "url": (
+                    f"https://data.eastmoney.com/notices/detail/{code}/{art_code}.html"
+                    if art_code
+                    else ""
+                ),
+                "kind": "公告",
+                # 内部字段：正文接口以 art_code 为键，不进提示词。
+                "art_code": art_code,
+            })
+
+        if len(items) < page_size:
+            break
+
     return articles
+
+
+#: 公告正文接口（以 art_code 为键）。实测 2026-10-16 可用，返回 notice_content。
+_ANNOUNCEMENT_CONTENT_URL = "https://np-cnotice-stock.eastmoney.com/api/content/ann"
+
+#: 单条正文塞进提示词的最大字符数。年报可以几万字，截断是刻意的——分析师要的是
+#: 「发生了什么」，不是把整份 PDF 搬进上下文。
+_ANNOUNCEMENT_BODY_CHARS = 1200
+
+
+def _news_announcement_pages() -> int:
+    """公告最多翻几页（``MARVEL_NEWS_ANNOUNCEMENT_PAGES``，默认 3，最小 1）。"""
+    try:
+        return max(1, int(os.environ.get("MARVEL_NEWS_ANNOUNCEMENT_PAGES", "3")))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _news_body_limit() -> int:
+    """每次取数最多抓几条公告正文（``MARVEL_NEWS_BODY_LIMIT``，默认 5，0 关闭）。"""
+    try:
+        return max(0, int(os.environ.get("MARVEL_NEWS_BODY_LIMIT", "5")))
+    except (TypeError, ValueError):
+        return 5
+
+
+def _clean_body_text(text: str, *, limit: int = _ANNOUNCEMENT_BODY_CHARS) -> str:
+    """正文清洗：去标签与实体，**保留段落换行**（_strip_html 会把换行压成空格）。"""
+    if not text:
+        return ""
+    import html as _html
+
+    text = _TAG_RE.sub("", str(text))
+    text = _html.unescape(text).replace("\u3000", " ").replace("\xa0", " ")
+    text = _re.sub(r"[ \t]+", " ", text)
+    text = _re.sub(r"\n\s*\n\s*\n+", "\n\n", text).strip()
+    if limit and len(text) > limit:
+        text = text[:limit].rstrip() + "…（正文已截断）"
+    return text
+
+
+def _fetch_announcement_body(art_code: str) -> str:
+    """一条公告的正文（东财内容接口）。
+
+    列表接口只给标题。标题足以知道「出事了」（回购/减持/立案），不足以知道
+    「说了什么」——「关于媒体报道的澄清公告」这种标题没有正文等于什么都没有。
+    调用方会限制条数，所以这里不做缓存/预算，只做一次请求 + 清洗。
+    """
+    if not art_code:
+        return ""
+    response = _em_get(
+        _ANNOUNCEMENT_CONTENT_URL,
+        params={"art_code": art_code, "client_source": "web", "page_index": "1"},
+        timeout=15,
+    )
+    response.raise_for_status()
+    data = (response.json() or {}).get("data") or {}
+    return _clean_body_text(data.get("notice_content") or data.get("content") or "")
+
+
+def _enrich_announcement_bodies(
+    articles: list[dict], start_date: str, end_date: str
+) -> int:
+    """把窗口内最高信号的公告从「只有标题」补成「有正文」。返回成功条数。"""
+    limit = _news_body_limit()
+    if limit <= 0:
+        return 0
+    start = _parse_news_date(start_date)
+    end = _parse_news_date(end_date)
+    fetched = 0
+    for item in articles:
+        if fetched >= limit:
+            break
+        if item.get("kind") != "公告" or item.get("content") or not item.get("art_code"):
+            continue
+        pub = item.get("pub_date")
+        if pub is not None and start is not None and end is not None:
+            if not (start <= pub <= end):
+                continue
+        try:
+            with timed("新闻源 公告正文", slow_over=3.0):
+                body = _fetch_announcement_body(item["art_code"])
+        except Exception as exc:  # noqa: BLE001 — 正文是加分项，失败不拖垮列表
+            logger.warning("公告正文抓取失败 %s: %s", item.get("art_code"), exc)
+            continue
+        if body:
+            item["content"] = body
+            fetched += 1
+    return fetched
 
 
 def _fetch_news_research(
@@ -2084,6 +2212,13 @@ def _news_search_enabled() -> bool:
     )
 
 
+def _format_source_counts(source_counts: dict[str, int]) -> str:
+    """「公告 30 条、研报 2 条…」，或明说「各源均返回 0 条」。"""
+    return "、".join(
+        f"{label} {n} 条" for label, n in source_counts.items() if n
+    ) or "各源均返回 0 条"
+
+
 def _collect_stock_news(
     code: str, start_date: str, end_date: str, *, limit: int = 80
 ) -> tuple[list[dict], dict[str, int]]:
@@ -2093,12 +2228,21 @@ def _collect_stock_news(
     source contributed, so the caller can tell the reader where the list came
     from — a short list from three healthy sources and a short list from one dead
     source mean very different things.
+
+    Each surviving item also carries ``corroboration``: how many *different*
+    feeds carried the same story. ``1`` means nobody confirmed it — exactly the
+    state that must not be silently upgraded into a fact downstream.
     """
     counts: dict[str, int] = {}
     collected: list[dict] = []
 
     sources = (
-        ("公告", lambda: _fetch_news_announcements(code)),
+        ("公告", lambda: _fetch_news_announcements(
+            code,
+            start_date=start_date,
+            end_date=end_date,
+            max_pages=_news_announcement_pages(),
+        )),
         ("研报", lambda: _fetch_news_research(code, start_date=start_date, end_date=end_date)),
         ("新闻", lambda: _fetch_news_sina(code)),
     )
@@ -2118,11 +2262,13 @@ def _collect_stock_news(
 
     # De-duplicate: prefer the higher-signal kind, then the longer body.
     best: dict[str, dict] = {}
+    kinds_by_key: dict[str, set] = {}
     for item in collected:
         key = _news_dedup_key(item.get("title", ""))
         if not key:
             continue
         item.setdefault("kind", "新闻")
+        kinds_by_key.setdefault(key, set()).add(item["kind"])
         current = best.get(key)
         if current is None:
             best[key] = item
@@ -2145,6 +2291,10 @@ def _collect_stock_news(
     articles = list(best.values())
     for item in articles:
         item["pub_date"] = _parse_news_date(item.get("time", ""))
+        key = _news_dedup_key(item.get("title", ""))
+        kinds = kinds_by_key.get(key) or {item.get("kind", "新闻")}
+        item["corroboration"] = len(kinds)
+        item["corroborating_kinds"] = sorted(k for k in kinds if k)
 
     articles.sort(
         key=lambda a: (
@@ -2152,7 +2302,12 @@ def _collect_stock_news(
             -(a["pub_date"].toordinal() if a.get("pub_date") else 0),
         )
     )
-    return articles[:limit], counts
+    articles = articles[:limit]
+
+    # 窗口内的公告补正文（最高信号 + 接口最稳）。失败只是少一段正文，不抛。
+    _enrich_announcement_bodies(articles, start_date, end_date)
+
+    return articles, counts
 
 
 def _parse_news_date(value) -> date | None:
@@ -2223,19 +2378,16 @@ def get_news(
 
     articles, source_counts = _collect_stock_news(code, start_date, end_date)
 
-    source_line = "、".join(
-        f"{label} {n} 条" for label, n in source_counts.items() if n
-    ) or "各源均返回 0 条"
-
     if not articles:
         return (
             f"No news found for A-stock '{code}' between {start_date} and {end_date}. "
-            f"Sources queried: {source_line}."
+            f"Sources queried: {_format_source_counts(source_counts)}."
         )
 
     news_str = ""
     count = 0
     undated = 0
+    single_source = 0
     kind_counts: dict[str, int] = {}
     for art in articles:
         pub_date = art.get("pub_date") or _parse_news_date(art.get("time", ""))
@@ -2254,7 +2406,14 @@ def get_news(
         link = art.get("url", "")
 
         # 标出来源类型：公告与研报是硬信息，新闻稿是软信息，读者/模型据此分配权重。
-        news_str += f"### [{kind}] {title} (source: {source})\n"
+        # 同时标出「几家源印证过」：单一来源的说法不能被下游当成事实。
+        corroboration = int(art.get("corroboration") or 1)
+        if corroboration >= 2:
+            evidence = "多源印证：" + "、".join(art.get("corroborating_kinds") or [])
+        else:
+            evidence = "单一来源，未经交叉验证"
+            single_source += 1
+        news_str += f"### [{kind}] {title} (source: {source}; {evidence})\n"
         if content:
             snippet = content[:300] + "..." if len(content) > 300 else content
             news_str += f"{snippet}\n"
@@ -2264,9 +2423,7 @@ def get_news(
         count += 1
         kind_counts[kind] = kind_counts.get(kind, 0) + 1
 
-    source_line = "、".join(
-        f"{label} {n} 条" for label, n in source_counts.items() if n
-    ) or "各源均返回 0 条"
+    source_line = _format_source_counts(source_counts)
 
     if count == 0:
         parts = [
@@ -2302,6 +2459,11 @@ def get_news(
             f"> ⚠️ {undated} article(s) were dropped because their publication "
             "date could not be read."
         )
+    if single_source:
+        notes.append(
+            f"> ⚠️ {single_source} 条为单一来源（未经交叉验证）：引用时必须保留这一标注，"
+            "不得把未经证实的说法当作事实，也不得仅凭单一来源的消息给出结论。"
+        )
     if _is_historical(end_date):
         notes.append(
             "> ⚠️ The press feed only serves the most recent articles; earlier "
@@ -2319,6 +2481,26 @@ def get_news(
 
 
 # ---- 8. get_global_news ----
+
+
+#: 财联社网页端签名常量。2026 年起未签名请求一律被拒（旧端点 nodeapi/telegraphList
+#: 直接 404 返回 HTML），而 `_parse_news_date` 看不出来——只会报 JSON 解析失败。
+_CLS_APP_PARAMS = {"app": "CailianpressWeb", "os": "web", "sv": "8.4.6"}
+
+
+def _cls_signed_params(params: dict) -> dict:
+    """给财联社请求参数补上它现在要求的签名。
+
+    算法（网页端实际使用，实测 v1/roll/get_roll_list 返回 errno=0、roll_data 非空）：
+    ``sign = md5(sha1(urlencode(sorted(params + app/os/sv))))``。
+    """
+    signed = dict(params)
+    signed.update(_CLS_APP_PARAMS)
+    query = urllib.parse.urlencode(sorted(signed.items()))
+    signed["sign"] = hashlib.md5(
+        hashlib.sha1(query.encode()).hexdigest().encode()
+    ).hexdigest()
+    return signed
 
 
 @clamp_arguments("curr_date")
@@ -2342,14 +2524,15 @@ def get_global_news(
 
     all_news: list[dict] = []
 
-    # Source 1: CLS wire (财联社快讯) — direct HTTP
+    # Source 1: CLS wire (财联社快讯) — direct HTTP, signed
     try:
-        cls_url = "https://www.cls.cn/nodeapi/telegraphList"
-        cls_params = {"rn": str(limit), "page": "1"}
+        cls_url = "https://www.cls.cn/v1/roll/get_roll_list"
+        cls_params = _cls_signed_params({"rn": str(limit), "page": "1"})
         cls_headers = {"User-Agent": _UA, "Referer": "https://www.cls.cn/"}
         r_cls = _requests.get(cls_url, params=cls_params, headers=cls_headers, timeout=10)
+        r_cls.raise_for_status()
         d_cls = r_cls.json()
-        for item in d_cls.get("data", {}).get("roll_data", []):
+        for item in (d_cls.get("data") or {}).get("roll_data") or []:
             title = item.get("title", "") or item.get("brief", "")
             content = item.get("content", "") or item.get("brief", "")
             ctime = item.get("ctime", "")
@@ -2364,8 +2547,8 @@ def get_global_news(
                 except (ValueError, TypeError, OSError):
                     pub_time = str(ctime)
             all_news.append({
-                "title": title,
-                "content": content,
+                "title": _strip_html(title),
+                "content": _strip_html(content),
                 "time": pub_time,
                 "pub_date": _parse_news_date(ctime),
                 "source": "CLS Wire",
@@ -2400,6 +2583,41 @@ def get_global_news(
             })
     except Exception as e:
         logger.warning("Eastmoney global news fetch failed: %s", e)
+
+    # Source 3: Sina 7x24 wire (新浪财经快讯) — direct HTTP. 第三个源存在的意义就是
+    # 前两个里任意一个挂掉时，快讯层不会整层变空（CLS 曾在旧端点上静默死了很久，
+    # 而报告读起来像「那几天没有新闻」）。
+    try:
+        sina_url = "https://zhibo.sina.com.cn/api/zhibo/feed"
+        sina_params = {
+            "page": "1",
+            "page_size": str(max(limit, 5)),
+            "zhibo_id": "152",
+            "tag_id": "0",
+            "dire": "f",
+            "dpc": "1",
+        }
+        sina_headers = {"User-Agent": _UA, "Referer": "https://finance.sina.com.cn/7x24/"}
+        r_sina = _requests.get(
+            sina_url, params=sina_params, headers=sina_headers, timeout=10
+        )
+        r_sina.raise_for_status()
+        d_sina = r_sina.json()
+        feed = ((d_sina.get("result") or {}).get("data") or {}).get("feed") or {}
+        for item in feed.get("list") or []:
+            text = _strip_html(item.get("rich_text") or item.get("text") or "")
+            if not text:
+                continue
+            created = item.get("create_time") or ""
+            all_news.append({
+                "title": text[:80],
+                "content": text,
+                "time": created,
+                "pub_date": _parse_news_date(created),
+                "source": "Sina 7x24",
+            })
+    except Exception as e:
+        logger.warning("Sina 7x24 news fetch failed: %s", e)
 
     if not all_news:
         return f"No global news found for {curr_date}"
@@ -2449,7 +2667,31 @@ def get_global_news(
             reason = f"N/A: {start_date} ~ {curr_date} 窗口内没有快讯{why}。"
         return f"{header}\n{reason}"
 
+    # 三个源合并后按「先来先得」截断的话，第一个源（实测是 CLS）会占满整个配额，
+    # 另外两个源查了等于没查。按源轮流取，保证每个活着的源都进入报告。
+    by_source: dict[str, list[dict]] = {}
+    for n in in_window:
+        by_source.setdefault(n["source"], []).append(n)
+    interleaved: list[dict] = []
+    index = 0
+    while len(interleaved) < len(in_window):
+        progressed = False
+        for source_items in by_source.values():
+            if index < len(source_items):
+                interleaved.append(source_items[index])
+                progressed = True
+        if not progressed:
+            break
+        index += 1
+    in_window = interleaved
+
     notes = []
+    source_line = "、".join(
+        f"{src} {len(items)} 条" for src, items in by_source.items()
+    )
+    notes.append(
+        f"> 来源：{source_line}；去重并裁到窗口内后展示前 {min(limit, len(in_window))} 条。"
+    )
     if historical:
         # 窗口内确实有条目，但源只返回最新 N 条，历史窗口注定不完整——必须说清楚。
         notes.append(

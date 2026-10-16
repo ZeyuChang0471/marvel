@@ -21,9 +21,10 @@
 | 东方财富 datacenter | HTTP (datacenter-web) | 龙虎榜、限售解禁、板块行情 |
 | 东方财富 push2/push2his | HTTP (push2.eastmoney) | 实时行情、个股信息、板块列表、资金流(分钟+日级) |
 | 东方财富 np-weblist | HTTP | 滚动新闻 |
-| 新浪财经 | HTTP (money.finance.sina) | K线历史、财报三表 |
+| 东方财富 np-anotice / np-cnotice / reportapi | HTTP | 个股公告（列表 + 正文）、券商研报 |
+| 新浪财经 | HTTP (money.finance.sina) | K线历史、财报三表、个股新闻稿、7×24 快讯 |
 | 同花顺 10jqka | HTTP | EPS 一致预期、热股题材 |
-| 财联社 cls.cn | HTTP | 全球财经快讯 |
+| 财联社 cls.cn | HTTP | 全球财经快讯（v1/roll/get_roll_list + md5(sha1(query)) 签名） |
 | 百度股市通 | HTTP (gushitong.baidu) | 概念板块归属（资金流已迁移至东财push2） |
 
 ### Agent 角色（9 个）

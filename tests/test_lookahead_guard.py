@@ -304,7 +304,11 @@ def _cn_ts(date_str: str) -> int:
 
 
 def _fake_sources(monkeypatch, cls_items, em_items):
-    """同时假造财联社（_requests.get）与东财 7×24（_em_get）两个源。"""
+    """同时假造财联社 / 新浪 7×24（_requests.get）与东财 7×24（_em_get）三个源。
+
+    新浪那一路拿到的是财联社形状的载荷，所以它解析出 0 条——测试只关心
+    「窗口过滤不放过任何一条」，源是不是同一个形状无所谓。
+    """
 
     class _Resp:
         def __init__(self, payload):
@@ -312,6 +316,9 @@ def _fake_sources(monkeypatch, cls_items, em_items):
 
         def json(self):
             return self._payload
+
+        def raise_for_status(self):
+            return None
 
     monkeypatch.setattr(
         a_stock._requests,

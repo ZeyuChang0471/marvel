@@ -78,11 +78,49 @@ internal static class MarvelLauncher
         // ── Already running? Then this click means "show me the UI" ──────────────
         if (IsHealthy(1500))
         {
-            Console.WriteLine("[MARVEL] 服务已经在运行，直接打开浏览器。");
-            Console.WriteLine("[MARVEL] （不会再启动第二个实例——套两层 streamlit 会得到空白页。）");
-            OpenBrowser();
-            Pause("按回车关闭本窗口（服务继续在后台运行）。");
-            return 0;
+            // A healthy server is not necessarily the *current* code. The 2026-10-08
+            // report left this open: double-clicking after an edit just opened the
+            // browser onto the old build, and the user saw the old error again.
+            // Compare the running process's start time with the newest source mtime;
+            // the 2s slack absorbs filesystem timestamp granularity.
+            DateTime? startedAt = RunningServiceStartTime();
+            DateTime? newestSource = NewestSourceWriteTime(repo);
+            bool stale = startedAt.HasValue && newestSource.HasValue
+                && newestSource.Value > startedAt.Value.AddSeconds(2);
+
+            if (stale)
+            {
+                Console.WriteLine("[MARVEL] ⚠ 8501 上的服务是**旧版本**（代码改过之后没有重启）：");
+                Console.WriteLine("         服务启动于   " + FormatTime(startedAt));
+                Console.WriteLine("         代码最后修改 " + FormatTime(newestSource));
+                Console.Write("[MARVEL] 输入 R 回车 = 停掉旧服务并重启（加载新代码）；直接回车 = 只打开浏览器: ");
+                string answer = ReadLineSafe();
+                if (answer != null && answer.Trim().Equals("R", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!StopRunningService())
+                    {
+                        Console.WriteLine("[MARVEL] 没能停掉旧服务（权限不足？），请手动关掉它的窗口后重试。");
+                        Pause("按回车关闭本窗口。");
+                        return 6;
+                    }
+                    Console.WriteLine("[MARVEL] 旧服务已停止，重新启动…");
+                }
+                else
+                {
+                    Console.WriteLine("[MARVEL] 按你的选择：只打开浏览器（看到的仍是旧版本）。");
+                    OpenBrowser();
+                    Pause("按回车关闭本窗口（服务继续在后台运行）。");
+                    return 0;
+                }
+            }
+            else
+            {
+                Console.WriteLine("[MARVEL] 服务已经在运行，直接打开浏览器。");
+                Console.WriteLine("[MARVEL] （不会再启动第二个实例——套两层 streamlit 会得到空白页。）");
+                OpenBrowser();
+                Pause("按回车关闭本窗口（服务继续在后台运行）。");
+                return 0;
+            }
         }
 
         if (PortIsOpen())
@@ -302,6 +340,103 @@ internal static class MarvelLauncher
         {
             return false;
         }
+    }
+
+    /// <summary>Start time of the process listening on 8501, or null when unknown.</summary>
+    private static DateTime? RunningServiceStartTime()
+    {
+        int pid = ListeningPid();
+        if (pid <= 0) return null;
+        try { return Process.GetProcessById(pid).StartTime; }
+        catch (Exception) { return null; }
+    }
+
+    /// <summary>PID owning the 8501 listening socket (via netstat -ano), or -1.</summary>
+    private static int ListeningPid()
+    {
+        try
+        {
+            ProcessStartInfo info = new ProcessStartInfo("netstat", "-ano");
+            info.UseShellExecute = false;
+            info.RedirectStandardOutput = true;
+            info.CreateNoWindow = true;
+            Process probe = Process.Start(info);
+            if (probe == null) return -1;
+            string output = probe.StandardOutput.ReadToEnd();
+            probe.WaitForExit(5000);
+            string needle = "127.0.0.1:" + HealthPort.ToString(CultureInfo.InvariantCulture);
+            foreach (string raw in output.Split('\n'))
+            {
+                string line = raw.Trim();
+                if (line.IndexOf(needle, StringComparison.Ordinal) < 0) continue;
+                if (line.IndexOf("LISTENING", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                string[] parts = line.Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 0) continue;
+                int pid;
+                if (int.TryParse(parts[parts.Length - 1], out pid)) return pid;
+            }
+        }
+        catch (Exception) { /* netstat missing -> no stale check; never fatal */ }
+        return -1;
+    }
+
+    /// <summary>Newest mtime of the Python sources this exe launches, or null.</summary>
+    private static DateTime? NewestSourceWriteTime(string repo)
+    {
+        string[] roots = new string[]
+        {
+            Path.Combine(repo, "marvel"),
+            Path.Combine(repo, "web"),
+            Path.Combine(repo, "cli"),
+        };
+        DateTime newest = DateTime.MinValue;
+        try
+        {
+            foreach (string root in roots)
+            {
+                if (!Directory.Exists(root)) continue;
+                foreach (string file in Directory.GetFiles(root, "*.py", SearchOption.AllDirectories))
+                {
+                    DateTime written = File.GetLastWriteTime(file);
+                    if (written > newest) newest = written;
+                }
+            }
+        }
+        catch (Exception) { return null; }
+        if (newest == DateTime.MinValue) return null;
+        return newest;
+    }
+
+    private static string FormatTime(DateTime? value)
+    {
+        if (!value.HasValue) return "(未知)";
+        return value.Value.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+    }
+
+    private static string ReadLineSafe()
+    {
+        try { return Console.ReadLine(); }
+        catch (Exception) { return null; }
+    }
+
+    /// <summary>Stop the process holding 8501 and wait for the port to be free.</summary>
+    private static bool StopRunningService()
+    {
+        int pid = ListeningPid();
+        if (pid <= 0) return false;
+        try
+        {
+            Process stale = Process.GetProcessById(pid);
+            stale.Kill();
+            stale.WaitForExit(5000);
+        }
+        catch (Exception) { /* verified by the port check below */ }
+        for (int i = 0; i < 20; i++)
+        {
+            if (!PortIsOpen()) return true;
+            Thread.Sleep(250);
+        }
+        return !PortIsOpen();
     }
 
     /// <summary>Is anything at all listening on the port?</summary>

@@ -93,6 +93,32 @@ class TestLauncherSource:
         open_index = source.index("OpenBrowser();", wait_index)
         assert wait_index < open_index, "先开浏览器再等服务就绪"
 
+    def test_it_detects_a_stale_running_service(self):
+        """回归（2026-10-08 未修项）：双击后只开浏览器，看到的还是旧代码。
+
+        session log 把它列为待办 #2：发现 8501 上有健康服务时不检查它是不是旧版本。
+        """
+        source = _read_code(SOURCE)
+        assert "RunningServiceStartTime" in source, "没有取运行中服务的启动时间"
+        assert "NewestSourceWriteTime" in source, "没有取代码最后修改时间"
+        assert "旧版本" in source, "检测到陈旧服务但没有告诉用户"
+
+    def test_the_stale_restart_is_opt_in_and_targeted(self):
+        """杀进程必须①用户明确同意 ②只杀 netstat 报出来的那个 PID。"""
+        source = _read_code(SOURCE)
+        prompt = source.index("输入 R 回车")
+        kill_call = source.index("StopRunningService()", prompt)
+        assert prompt < kill_call, "还没问用户就先动了手"
+        assert "ListeningPid" in source and "GetProcessById" in source, (
+            "没有按监听端口定位进程，可能杀掉无关程序"
+        )
+
+    def test_the_stale_check_reads_only_the_server_sources(self):
+        source = _read_code(SOURCE)
+        assert 'Directory.GetFiles(root, "*.py"' in source, (
+            "陈旧判定没有限定在服务会加载的 .py 源码上"
+        )
+
     def test_it_is_c_sharp_5_compatible(self):
         """`csc.exe`（Framework 4.x）不接受 C# 6+ 语法：字符串插值、`?.`、`nameof`。"""
         source = _read_code(SOURCE)
