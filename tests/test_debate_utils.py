@@ -14,6 +14,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from marvel.agents.researchers.bear_researcher import create_bear_researcher
+from marvel.agents.managers.research_manager import create_research_manager
 from marvel.agents.researchers.bull_researcher import create_bull_researcher
 from marvel.agents.risk_mgmt.aggressive_debator import create_aggressive_debator
 from marvel.agents.risk_mgmt.conservative_debator import create_conservative_debator
@@ -192,3 +193,65 @@ class TestDebatersPreserveProvenanceLabels:
 
         lowered = llm.prompt
         assert "never let a single unverified rumour be the sole basis" in lowered
+
+
+class TestJudgeSeesTheProvenanceDigest:
+    """#2：裁判不再只看到辩论文本——机器生成的来源印证摘要进它的提示词。
+
+    审计的第 2 条结构性结论是「裁判看不到证据」。摘要只装机器可判定的东西：
+    新闻层已经打好的标注 + 未核实原句，不新增 LLM 调用，也不判真伪。
+    """
+
+    @pytest.mark.unit
+    def test_the_unverified_sentence_reaches_the_judge(self):
+        llm = _FakeLLM()
+        state = _investment_state(0)
+        state["company_of_interest"] = "600519"
+        state["news_report"] = (
+            "## 新闻分析\n"
+            "### [新闻] 某独家爆料 (source: 某媒体; 单一来源，未经交叉验证)\n"
+        )
+
+        create_research_manager(llm)(state)
+
+        assert "证据核对" in llm.prompt
+        assert "某独家爆料" in llm.prompt
+        assert "unverified_reliance" in llm.prompt
+
+    @pytest.mark.unit
+    def test_a_report_without_any_label_is_flagged_to_the_judge(self):
+        llm = _FakeLLM()
+        state = _investment_state(0)
+        state["company_of_interest"] = "600519"
+        state["news_report"] = "## 新闻分析\n消息很多，但没有一条带标注。"
+
+        create_research_manager(llm)(state)
+
+        assert "没有任何" in llm.prompt
+
+    @pytest.mark.unit
+    def test_without_a_news_report_there_is_no_extra_section(self):
+        llm = _FakeLLM()
+        state = _investment_state(0)
+        state["company_of_interest"] = "600519"
+        state["news_report"] = ""
+
+        create_research_manager(llm)(state)
+
+        assert "证据核对" not in llm.prompt
+
+
+class TestRiskDebatorsKeepProvenanceLabels:
+    """三方风险辩手同样被要求保留标注——它们的话会被 PM 直接读。"""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "factory",
+        [create_aggressive_debator, create_conservative_debator, create_neutral_debator],
+    )
+    def test_the_discipline_line_is_present(self, factory):
+        llm = _FakeLLM()
+        factory(llm)(_risk_state(0))
+
+        assert "未经交叉验证" in llm.prompt
+        assert "not a fact" in llm.prompt

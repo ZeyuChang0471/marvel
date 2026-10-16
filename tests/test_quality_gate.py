@@ -124,6 +124,32 @@ class TestUnselectedAnalystsAreNotGraded:
 
 
 @pytest.mark.unit
+class TestProvenanceCensusIsExported:
+    """门控把来源统计写进 data_quality_summary —— 下游（辩手/裁判）看得见。"""
+
+    def test_the_summary_reports_the_census(self):
+        llm = _StubLLM()
+        node = create_quality_gate(llm, selected_analysts=["news"])
+        report = _good_report("news") + (
+            "\n### [公告] 某公告 (source: 东方财富公告; 单一来源，未经交叉验证)\n"
+        )
+
+        summary = node(_state({"news_report": report}))["data_quality_summary"]
+
+        assert "来源印证核对" in summary
+        assert "单一来源（未经交叉验证）1 处" in summary
+        assert "不判断真伪" in summary
+
+    def test_no_news_section_when_news_was_not_selected(self):
+        llm = _StubLLM()
+        node = create_quality_gate(llm, selected_analysts=["market"])
+
+        summary = node(_state({"market_report": _good_report("market")}))["data_quality_summary"]
+
+        assert "来源印证核对" not in summary
+
+
+@pytest.mark.unit
 class TestReviewPromptMatchesTheSelection:
     def test_prompt_covers_exactly_the_selected_analysts(self):
         prompt = _build_review_prompt(

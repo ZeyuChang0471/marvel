@@ -41,6 +41,33 @@ Breaking changes within the 0.x line are called out explicitly.
   「C/D/F 的报告要降低依赖」。
 - 评级正则加词边界，`operating margin: 25%` 不再被当成 `rating` 标签。
 
+### Changed — 去极化（2026-10-17，四条全部落地）
+
+审计 `DEBATE_POLARIZATION_AUDIT.md` 的四条建议全部实施，**都不改图拓扑、不新增 LLM 调用**：
+
+- **门控核对来源标注**（`quality_gate.py` + 新模块 `marvel/agents/utils/evidence.py`）：
+  新闻报告既没有「多源印证 / 单一来源，未经交叉验证」标注、也没有「工具没返回消息」
+  说明时，硬检查封顶 **B**；标注计数写进 `data_quality_summary`。门控仍然**不判真伪**
+  （标注完整的假消息报告照样 A，守卫保留）。
+- **裁判看到证据**（`research_manager.py`）：给 Research Manager 注入机器生成的来源印证
+  摘要（标注计数 + 未核实原句 ≤8 条×200 字；一条标注都没有时直接写明）；结构化 schema
+  新增 `unverified_reliance`，要求它列出结论实际依赖了哪几条未核实信息。
+- **未证实说法离开决策正文**（`schemas.py` / `portfolio_manager.py`）：PM 结构化输出新增
+  `unverified_claims`，渲染成报告末尾的「未经证实的信息（仅供参考，不作为决策依据）」
+  附录。刻意**不删除**原文——删掉「据传」会把一句话变成断言。正文里内联的未核实句子
+  同样会被收进附录。
+- **记忆不再强化传闻**（`memory.py`）：作为「过往教训」重新注入时，附录内容被剔除，
+  只留一句「另有 N 条未经证实的说法已剔除」。
+- **真实模型录制工具**（`marvel/harness/llm_recorder.py` + `scripts/record_debate.py`）：
+  LangChain 回调把一次真实运行的每次 LLM 调用写成 JSONL；`--report` 离线统计「提示词带
+  未核实说法、响应丢标注」的调用。运行本身要花钱，脚本先打印模型与路径、没有 `--yes` 不跑。
+- 多空辩手与三方风险辩手的提示词统一加了证据纪律（保留标注、不得把未证实说法当事实）。
+- 录制器记录 `tool_calls`：结构化输出（RM / Trader / PM）的正文在那里，DeepSeek 的
+  thinking 模型在这类调用上 `content` 是空的——第一版录制因此把那三个阶段的正文录丢了。
+- 新增 `MARVEL_LLM_TIMEOUT_S` / `MARVEL_LLM_MAX_RETRIES`（默认不设，保持 SDK 行为）：
+  一次真实运行里出现过 provider 调用挂死（TCP CLOSE_WAIT、CPU 冻结），SDK 默认 600s×3 次
+  会把流水线拖半小时；录制脚本默认设 240s / 1 次。
+
 ### Fixed — 消息获取（2026-10-17，全部联网实测）
 
 - **历史窗口取不到公告**（最要命的一条）。`_fetch_news_announcements` 原先取「最新 30 条」

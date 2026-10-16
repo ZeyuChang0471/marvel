@@ -25,6 +25,9 @@
 | `loop.py` | `AgentLoop`：模型回合 → 工具调用 → 工具结果 → 再问，带**显式的步数预算** |
 | `recorder.py` | `RunRecorder`：每个回合写 JSONL；`load_recording()` 读回来 |
 | `models.py` | 三个适配器：`LangChainToolCallingModel`（真实 DeepSeek）、`ScriptedModel`（测试/确定性）、`ReplayModel`（回放） |
+| `llm_recorder.py` | `JsonlLlmRecorder`：LangChain 回调，把一次**真实运行**的每个
+prompt/response（含 `reasoning_content`）写成 JSONL。用于回答「真实模型会不会把未证实
+的说法复述出去」——桩模型回答不了这个问题 |
 | `__main__.py` | `python -m marvel.harness` 命令行 |
 
 **没有第二个 HTTP 客户端。** 真实模型走 `marvel.llm_clients` 的
@@ -54,6 +57,36 @@ loop = AgentLoop(
 result = loop.run("研究 600519 近期的消息面风险")
 print(result.final, result.stopped_because, len(result.tool_calls))
 ```
+
+## 录制一次真实辩论
+
+```bash
+# 会计费：先打印 provider / 模型 / 标的 / 输出路径，没有 --yes 不跑
+python scripts/record_debate.py --ticker 600487 --date 2026-10-16 --yes
+
+# 离线读回：哪些阶段的提示词里带了「未经交叉验证」的说法，响应里却丢了标注
+python scripts/record_debate.py --report .marvel_state/recordings/debate-600487-2026-10-16.jsonl
+python scripts/record_debate.py --report <同上> --dump 7   # 打印某一条的全文
+```
+
+录制走 `MarvelGraph(callbacks=[...])`——回调层注入，不需要代理对象、不需要第二个 HTTP
+客户端，结构化输出调用也会被捕获（它们走同一个 chat model）。**结构化输出的正文在
+`tool_calls` 里**（DeepSeek 的 thinking 模型在这种调用上 content 是空的），录制会把它
+一起记下来；否则 RM / Trader / PM 三个阶段看起来全是「空响应」。
+
+录一次真实辩论可以做两件分开的事：
+
+```bash
+# 全流程（9 分析师 + 门控 + 辩论 + 裁决，约 20–40 次调用）
+python scripts/record_debate.py --ticker 600487 --date 2026-10-16 --yes
+
+# 只重跑辩论 + 裁决（复用上一条录制里的 9 份报告，约 8–12 次调用）
+python scripts/record_debate.py --from-recording .marvel_state/recordings/debate-600487-2026-10-16.jsonl \
+    --ticker 600487 --date 2026-10-16 --yes
+```
+
+两个模式默认把 `MARVEL_LLM_TIMEOUT_S=240`、`MARVEL_LLM_MAX_RETRIES=1` 设进环境
+（用已有的值优先）：实测有一次 provider 调用挂住、SDK 默认 600s×3 次会把流水线拖半小时。
 
 ## 四个刻意的设计决定
 

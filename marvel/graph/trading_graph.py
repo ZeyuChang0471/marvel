@@ -216,6 +216,22 @@ class MarvelGraph:
             if effort:
                 kwargs["effort"] = effort
 
+        # 请求超时 / 重试次数：默认交给 SDK。可用环境变量收紧——实测有一次
+        # provider 调用挂住（TCP CLOSE_WAIT 堆积、连接不再返回），SDK 默认
+        # 600s×3 次会把整条流水线拖住半小时。录制脚本默认设 240s / 1 次。
+        timeout = os.environ.get("MARVEL_LLM_TIMEOUT_S", "").strip()
+        if timeout:
+            try:
+                kwargs["timeout"] = float(timeout)
+            except ValueError:
+                logger.warning("MARVEL_LLM_TIMEOUT_S 不是数字：%r（忽略）", timeout)
+        retries = os.environ.get("MARVEL_LLM_MAX_RETRIES", "").strip()
+        if retries:
+            try:
+                kwargs["max_retries"] = int(retries)
+            except ValueError:
+                logger.warning("MARVEL_LLM_MAX_RETRIES 不是整数：%r（忽略）", retries)
+
         return kwargs
 
     def _create_tool_nodes(self) -> Dict[str, Callable]:

@@ -55,7 +55,7 @@ Macro / Sector-Rotation Report: {macro_report}
 本轮议题目标（第 {round_no} 轮）：{round_goal}
 Conversation history: {history} Last conservative argument: {current_conservative_response} Last neutral argument: {current_neutral_response}. If no responses yet, present your own argument.
 
-Engage actively, debate persuasively, and assert why aggressive positioning is optimal for this A-share opportunity. Output conversationally without special formatting.{get_language_instruction()}"""
+Engage actively, debate persuasively, and assert why aggressive positioning is optimal for this A-share opportunity. Output conversationally without special formatting. Any claim marked 「单一来源，未经交叉验证」 is a claim, not a fact: keep its label, and never let a single unverified rumour drive your argument.{get_language_instruction()}"""
 
         response = llm.invoke(prompt)
 

@@ -56,7 +56,7 @@ Macro / Sector-Rotation Report: {macro_report}
 本轮议题目标（第 {round_no} 轮）：{round_goal}
 Conversation history: {history} Last aggressive argument: {current_aggressive_response} Last conservative argument: {current_conservative_response}. If no responses yet, present your own argument.
 
-Advocate for a balanced, position-sized approach that captures A-share upside while respecting the market's structural constraints. Output conversationally without special formatting.{get_language_instruction()}"""
+Advocate for a balanced, position-sized approach that captures A-share upside while respecting the market's structural constraints. Output conversationally without special formatting. Any claim marked 「单一来源，未经交叉验证」 is a claim, not a fact: keep its label, and never let a single unverified rumour drive your argument.{get_language_instruction()}"""
 
         response = llm.invoke(prompt)
 

@@ -158,6 +158,12 @@
 > 给每条消息标「多源印证」或「单一来源，未经交叉验证」。正文条数用
 > `MARVEL_NEWS_BODY_LIMIT`（默认 5，0 关闭）、公告翻页用
 > `MARVEL_NEWS_ANNOUNCEMENT_PAGES`（默认 3）控制。
+>
+> **去极化（2026-10-17）**：这些标注不会被丢掉——质量门控核对标注是否传递（丢了封顶 B，
+> 但不判真伪）；Research Manager 收到机器生成的来源印证摘要并要显式声明
+> `unverified_reliance`；Portfolio Manager 把未核实说法移进报告末尾的「未经证实的信息」
+> 附录（不删除原文）；记忆日志重新注入时会剔除附录内容。真实模型的行为用
+> `python scripts/record_debate.py` 录制后离线分析。
 
 ---
 

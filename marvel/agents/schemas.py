@@ -19,9 +19,11 @@ so that:
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
+
+from marvel.agents.utils.evidence import append_unverified_appendix
 
 
 # ---------------------------------------------------------------------------
@@ -88,17 +90,33 @@ class ResearchPlan(BaseModel):
             "consistent with the rating."
         ),
     )
+    unverified_reliance: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Quote the items from the provenance digest that are marked "
+            "「单一来源，未经交叉验证」 and that your recommendation actually relies "
+            "on. Empty list when the recommendation relies on none of them. Never "
+            "restate one of those items as a confirmed fact in the rationale."
+        ),
+    )
 
 
 def render_research_plan(plan: ResearchPlan) -> str:
     """Render a ResearchPlan to markdown for storage and the trader's prompt context."""
-    return "\n".join([
+    parts = [
         f"**Recommendation**: {plan.recommendation.value}",
         "",
         f"**Rationale**: {plan.rationale}",
         "",
         f"**Strategic Actions**: {plan.strategic_actions}",
-    ])
+    ]
+    if plan.unverified_reliance:
+        parts.extend([
+            "",
+            "**Unverified Reliance**: "
+            + "；".join(str(item) for item in plan.unverified_reliance),
+        ])
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +207,16 @@ class PortfolioDecision(BaseModel):
         default=None,
         description="Optional analysis horizon, e.g. '3-6 months'.",
     )
+    unverified_claims: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Every claim you used that the news layer marked "
+            "「单一来源，未经交叉验证」, quoted as written. These must NOT be restated "
+            "as facts inside the executive summary or the investment thesis; they are "
+            "printed as a clearly labelled appendix instead. Empty list when the "
+            "decision relies on nothing unverified."
+        ),
+    )
 
 
 def render_pm_decision(decision: PortfolioDecision) -> str:
@@ -208,4 +236,7 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     ]
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
-    return "\n".join(parts)
+
+    # 未证实的说法从决策正文里移出来、集中标注——删除句子比保留更危险
+    # （删掉「据传」会把一句话变成模型没说过的断言）。见 evidence.py。
+    return append_unverified_appendix("\n".join(parts), decision.unverified_claims)

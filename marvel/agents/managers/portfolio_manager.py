@@ -11,6 +11,7 @@ back gracefully to free-text generation.
 from __future__ import annotations
 
 from marvel.agents.schemas import PortfolioDecision, render_pm_decision
+from marvel.agents.utils.evidence import append_unverified_appendix
 from marvel.agents.utils.agent_utils import (
     build_instrument_context,
     get_language_instruction,
@@ -26,6 +27,16 @@ from marvel.agents.utils.structured import (
 _NO_LEVELS_RULE = (
     "\n- Do NOT state entry prices, stop-loss levels, target prices or "
     "position sizes for this security; give the rating and the reasoning."
+)
+
+
+# 未证实的说法必须离开决策正文、进 unverified_claims 字段（渲染成带标注的附录）。
+# 只删不标会让读者以为报告没提过它；标了却留在结论里，等于把传闻当结论。
+_PROVENANCE_RULE = (
+    "\n- Any claim marked 「单一来源，未经交叉验证」 must be quoted as written in the "
+    "`unverified_claims` field and must NOT be restated as a fact in the executive "
+    "summary or the investment thesis. If the rating depends on such a claim, say so "
+    "explicitly and keep its uncertainty label."
 )
 
 
@@ -89,7 +100,7 @@ def create_portfolio_manager(llm):
 
 ---
 
-Be decisive and ground every conclusion in specific evidence from the analysts.{_NO_LEVELS_RULE}{get_language_instruction()}"""
+Be decisive and ground every conclusion in specific evidence from the analysts.{_NO_LEVELS_RULE}{_PROVENANCE_RULE}{get_language_instruction()}"""
 
         final_trade_decision = invoke_structured_or_freetext(
             structured_llm,
@@ -98,6 +109,11 @@ Be decisive and ground every conclusion in specific evidence from the analysts.{
             render_pm_decision,
             "Portfolio Manager",
         )
+
+        # 结构化路径已经在 render_pm_decision 里加了附录；自由文本回退没有 schema，
+        # 未证实的说法可能留正文里——统一再过一道，把带标注的句子收进附录。
+        # 幂等：已有附录时只是重建同一个附录。
+        final_trade_decision = append_unverified_appendix(final_trade_decision, [])
 
         new_risk_debate_state = {
             "judge_decision": final_trade_decision,

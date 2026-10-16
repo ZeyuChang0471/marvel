@@ -702,6 +702,66 @@ class TestPortfolioManagerInjection:
         assert decision == "**Rating**: Sell\n\nExit ahead of guidance."
         assert parse_rating(decision) == "Sell"
 
+    def test_unverified_claims_move_to_a_labelled_appendix(self):
+        captured = {}
+        claim = "某独家爆料：公司被立案调查（单一来源，未经交叉验证）"
+        decision = PortfolioDecision(
+            rating=PortfolioRating.HOLD,
+            executive_summary="Hold the position.",
+            investment_thesis="Balanced view.",
+            unverified_claims=[claim],
+        )
+        llm = _structured_pm_llm(captured, decision)
+
+        md = create_portfolio_manager(llm)(_make_pm_state())["final_trade_decision"]
+
+        body, appendix = md.split("## 未经证实的信息")
+        assert claim in appendix, "未证实的说法没有进附录"
+        assert claim not in body, "未证实的说法仍留在决策正文里"
+        assert "不作为决策依据" in md
+
+    def test_the_freetext_fallback_still_gets_the_appendix(self):
+        """结构化输出不可用时（例如 thinking 模式不支持 tool_choice），
+        正文里带标注的未核实句子仍要被收进附录。"""
+        plain = (
+            "**Rating**: Sell\n\n"
+            "**Investment Thesis**: 依据某独家爆料（单一来源，未经交叉验证），应当离场。"
+        )
+        llm = MagicMock()
+        llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
+        llm.invoke.return_value = MagicMock(content=plain)
+
+        md = create_portfolio_manager(llm)(_make_pm_state())["final_trade_decision"]
+
+        body, appendix = md.split("## 未经证实的信息")
+        assert "某独家爆料" in appendix
+        assert "**Rating**: Sell" in body
+
+    def test_the_appendix_is_idempotent(self):
+        claim = "某独家爆料：公司被立案调查（单一来源，未经交叉验证）"
+        decision = PortfolioDecision(
+            rating=PortfolioRating.HOLD,
+            executive_summary="Hold.",
+            investment_thesis="Balanced.",
+            unverified_claims=[claim],
+        )
+        llm = _structured_pm_llm({}, decision)
+
+        md = create_portfolio_manager(llm)(_make_pm_state())["final_trade_decision"]
+
+        # 重新处理一次不应产生第二个附录，也不应重复列条目
+        assert md.count("## 未经证实的信息") == 1
+        assert md.count(claim) == 1
+
+    def test_the_pm_prompt_forbids_restating_unverified_claims(self):
+        captured = {}
+        llm = _structured_pm_llm(captured)
+
+        create_portfolio_manager(llm)(_make_pm_state())
+
+        assert "unverified_claims" in captured["prompt"]
+        assert "单一来源，未经交叉验证" in captured["prompt"]
+
     # get_past_context ordering and limits
 
     def test_same_ticker_prioritised(self, tmp_path):
@@ -837,3 +897,25 @@ class TestLegacyRemoval:
         assert len(entries) == 1
         assert entries[0]["ticker"] == "NVDA"
         assert entries[0]["pending"] is True
+
+
+# ---------------------------------------------------------------------------
+# 未证实的内容不得作为「过往教训」被再次注入
+# ---------------------------------------------------------------------------
+
+
+class TestUnverifiedContentDoesNotBecomeALesson:
+    def test_the_appendix_is_stripped_before_reinjection(self, tmp_path):
+        log = make_log(tmp_path)
+        decision = (
+            "**Rating**: Hold\n\n**Investment Thesis**: Balanced.\n\n"
+            "## 未经证实的信息（仅供参考，不作为决策依据）\n\n"
+            "- 某独家爆料：公司被立案调查（单一来源，未经交叉验证）\n"
+        )
+        _resolve_entry(log, "NVDA", "2026-01-05", decision)
+
+        context = log.get_past_context("NVDA")
+
+        assert "Balanced." in context
+        assert "某独家爆料" not in context, "传闻会被当成教训注入之后的每一次运行"
+        assert "已剔除" in context

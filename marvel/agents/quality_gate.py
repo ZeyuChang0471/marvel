@@ -1,5 +1,7 @@
 from typing import Annotated
 
+from marvel.agents.utils.evidence import NO_NEWS_HINTS, provenance_census
+
 REPORT_FIELDS = {
     "market": "market_report",
     "social": "sentiment_report",
@@ -35,8 +37,8 @@ FAILURE_MARKERS = [
 ]
 
 
-def _hard_check_report(analyst_type: str, report: str) -> tuple:
-    """Run hard checks on a single report. Returns (grade, detail)."""
+def _shape_check(report: str) -> tuple:
+    """The original shape-and-quality check, unchanged: length, failures, table."""
     if not report or not report.strip():
         return ("F", "报告为空")
 
@@ -66,6 +68,40 @@ def _hard_check_report(analyst_type: str, report: str) -> tuple:
         return ("B", "；".join(issues) if issues else "基本合格")
 
     return ("A", f"完整 ({length} chars)")
+
+
+def _hard_check_report(analyst_type: str, report: str) -> tuple:
+    """Shape check + (for the news report) a **provenance census**.
+
+    The audit (``DEBATE_POLARIZATION_AUDIT.md``) used to end here with "the gate
+    does not check provenance". It still does not check *truth* — nothing in this
+    repository can, and pretending otherwise would just add a second source of
+    hallucination. What changed on 2026-10-17 is narrower and mechanical: the
+    news tool labels every item 「多源印证」 or 「单一来源，未经交叉验证」, and the
+    gate now verifies that those labels survived into the report.
+
+    A news report that carries neither a label nor an explicit "the tool returned
+    nothing" marker had its uncertainty stripped somewhere between the tool output
+    and the prose — that is a mechanical fact, and it caps the grade at **B**
+    (not C/D: the report may be perfectly written, and nothing here says it is
+    wrong). A report that keeps its labels is graded exactly as before, with the
+    counts added to ``detail`` so downstream agents can see them.
+    """
+    grade, detail = _shape_check(report)
+
+    if analyst_type == "news":
+        census = provenance_census(report)
+        if census["total"]:
+            detail = (
+                f"{detail}；来源标注 {census['total']} 处"
+                f"（未经交叉验证 {census['unverified']} 处）"
+            )
+        elif not any(hint in report for hint in NO_NEWS_HINTS):
+            detail = f"{detail}；未保留来源印证标注"
+            if grade == "A":
+                grade = "B"
+
+    return grade, detail
 
 
 def _graded_fields(selected=None) -> list[str]:
@@ -219,11 +255,26 @@ def create_quality_gate(llm, selected_analysts=None):
             else ""
         )
 
+        # 来源印证核对：门控能做的是「标注有没有被如实传递」，不是「这条消息真不真」。
+        provenance_section = ""
+        news_report = reports.get("news_report") or ""
+        graded_news = "news" in _graded_fields(selected)
+        if graded_news and news_report:
+            census = provenance_census(news_report)
+            provenance_section = (
+                "\n### 来源印证核对（新闻报告）\n"
+                f"- 多源印证 {census['corroborated']} 处；"
+                f"单一来源（未经交叉验证）{census['unverified']} 处。\n"
+                "- 门控只核对标注是否被如实传递，**不判断真伪**；"
+                "任何未核实说法都不得被下游当作已确认事实。\n"
+            )
+
         summary = (
             f"## 数据质量门控结果\n\n"
             f"**标的**: {ticker} | **交易日**: {trade_date}\n"
             f"{skipped_note}\n"
-            f"### 硬检查结果\n{hard_summary}\n\n"
+            f"### 硬检查结果\n{hard_summary}\n"
+            f"{provenance_section}\n"
             f"### LLM 复审\n"
             f"{llm_review if llm_review else '（跳过 — 多数**已运行**的报告未通过硬检查）'}\n"
         )

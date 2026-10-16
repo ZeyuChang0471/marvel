@@ -372,42 +372,61 @@ class TestFakeNewsPropagation:
 
 
 @pytest.mark.unit
-class TestQualityGateDoesNotCheckProvenance:
-    """The gate is the only review step, and it reviews shape, not sourcing."""
+class TestQualityGateChecksLabelTransferNotTruth:
+    """门控仍然判不了真伪（它没有证据），但从 2026-10-17 起核对「标注有没有传下来」。
 
-    def test_a_well_formed_report_with_a_false_claim_is_graded_A(self):
+    这条改动是被本审计的结论直接推着走的：既然门控是唯一的复核工序，就让它
+    做唯一可判定的事——**纯字符串统计**来源标注。它不允许「不确定性被静默丢掉」，
+    也不允许自己假装能判断一条消息的真假。
+    """
+
+    def test_a_false_claim_with_its_label_kept_is_graded_on_shape(self):
+        from marvel.agents.quality_gate import _hard_check_report
+
+        report = (
+            f"## 新闻分析\n\n近期出现一则报道（单一来源，未经交叉验证）：{FAKE_CLAIM}\n\n"
+            + _BODY
+            + _TABLE
+        )
+
+        grade, detail = _hard_check_report("news", report)
+
+        assert grade == "A", f"标注完整的报告被降到 {grade}（{detail}）"
+        assert "来源标注 1 处" in detail
+        assert "未经交叉验证 1 处" in detail
+
+    def test_a_news_report_that_drops_the_labels_is_capped_at_b(self):
         from marvel.agents.quality_gate import _hard_check_report
 
         report = f"## 新闻分析\n\n近期出现一则报道：{FAKE_CLAIM}\n\n" + _BODY + _TABLE
 
         grade, detail = _hard_check_report("news", report)
 
-        assert grade == "A", (
-            f"假消息报告被硬检查判为 {grade}（{detail}）——如果它会被降级，"
-            "门控就是一道防线，这个结论需要改写"
+        assert grade == "B", (
+            "标注全丢了却还是 A —— 门控在说「不确定性可以随手丢」"
         )
+        assert "未保留来源印证标注" in detail
 
-    def test_the_gate_has_no_provenance_check(self):
-        """Structural: nothing in the gate inspects *where* a claim came from.
+    def test_it_does_not_judge_truth(self):
+        """结构性：来源核只是字符串统计，没有第二个「判断真假」的模型调用。
 
-        If a provenance check is ever added, this fails and the audit's
-        conclusion ("the gate is not a defence against a false claim") must be
-        revisited rather than left standing.
+        门控里出现 LLM 调用只允许是那份复审（在另一个函数里），
+        `_hard_check_report` 本身必须是纯函数。
         """
         import inspect
 
         from marvel.agents import quality_gate
 
-        source = inspect.getsource(quality_gate)
-        for marker in (
-            "provenance", "cross_check", "cross-check", "verify_source",
-            "核实来源", "交叉验证", "单一来源", "unverified",
-        ):
-            assert marker not in source, (
-                f"门控里出现了来源核对（{marker}）——本审计的结论需要改写"
-            )
+        source = inspect.getsource(quality_gate._hard_check_report)
+        assert "provenance_census" in source
+        assert "invoke(" not in source
 
-        # and what it grades is exactly the nine analyst report bodies
+        # 标注字面量只住在 evidence.py，门控不自己定义一份（会漂移）
+        assert "UNVERIFIED_LABEL" not in inspect.getsource(quality_gate)
+
+    def test_the_selected_analysts_still_define_what_is_graded(self):
+        from marvel.agents import quality_gate
+
         assert set(quality_gate.REPORT_FIELDS) == set(_ANALYST_STAGES)
 
 

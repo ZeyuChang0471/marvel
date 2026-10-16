@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 
 from marvel.agents.utils.rating import parse_rating_explicit
+from marvel.agents.utils.evidence import summarise_for_memory
 
 
 # Tag value used when the decision text carries no recognisable rating.
@@ -319,7 +320,9 @@ class TradingMemoryLog:
         alpha = e["alpha"] or "n/a"
         holding = e["holding"] or "n/a"
         tag = f"[{e['date']} | {e['ticker']} | {e['rating']} | {raw} | {alpha} | {holding}]"
-        parts = [tag, f"DECISION:\n{e['decision']}"]
+        # 未证实的内容不进「过往教训」：它会被注入之后的每一次运行，
+        # 复述一次就变成一次「强化」（见 DEBATE_POLARIZATION_AUDIT.md 第 6 条）。
+        parts = [tag, f"DECISION:\n{summarise_for_memory(e['decision'])}"]
         if e["reflection"]:
             parts.append(f"REFLECTION:\n{e['reflection']}")
         return "\n\n".join(parts)
@@ -328,6 +331,6 @@ class TradingMemoryLog:
         tag = f"[{e['date']} | {e['ticker']} | {e['rating']} | {e['raw'] or 'n/a'}]"
         if e["reflection"]:
             return f"{tag}\n{e['reflection']}"
-        text = e["decision"][:300]
+        text = summarise_for_memory(e["decision"])[:300]
         suffix = "..." if len(e["decision"]) > 300 else ""
         return f"{tag}\n{text}{suffix}"

@@ -842,6 +842,7 @@ class TestRepoLayout:
             "probe_data_quality",
             "probe_yfinance_indicators",
             "probe_news_sources",
+            "record_debate",
         ):
             path = REPO_ROOT / "scripts" / f"{name}.py"
             assert path.is_file(), f"缺少手工探针: {path}"
