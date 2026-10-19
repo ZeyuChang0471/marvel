@@ -50,10 +50,12 @@ _STAGE_MARKERS = (
     ("政策分析师", "policy"),
     ("市场情绪分析师", "social"),
     ("基本面分析师", "fundamentals"),
-    ("技术分析师", "market"),
-    ("游资", "hot_money"),
-    ("解禁", "lockup"),
-    ("量价", "volume_price"),
+    ("技术分析师。你的任务是", "market"),
+    # 量价分析师的提示词里同样出现「游资」二字，必须排在 hot_money 之前；
+    # 所有分析师标记都用**角色句**而不是关键词，避免下游提示词里嵌入的报告串台。
+    ("量价分析师（Volume Price Analysis）", "volume_price"),
+    ("游资与资金流向追踪分析师", "hot_money"),
+    ("解禁与减持监控分析师", "lockup"),
     ("宏观与板块分析师", "macro"),
 )
 
@@ -107,6 +109,57 @@ def reports_from_recording(records) -> tuple:
         if field and len(response.strip()) > 200:
             reports[field] = response
     return reports, quality
+
+
+def run_debate_chain(config, ticker: str, trade_date: str, reports: dict,
+                     quality: str = "", *, recorder=None) -> dict:
+    """在给定报告上跑完整辩论链（bull→bear→RM→trader→risk×3→PM），返回 state。
+
+    与图里的节点顺序一致（`graph/setup.py`）：多空各一轮、RM 用 deep、Trader 用
+    quick、三方风险各一轮、PM 用 deep。A/B 对照与 `--from-recording` 共用这一份。
+    """
+    from marvel.agents.managers.portfolio_manager import create_portfolio_manager
+    from marvel.agents.managers.research_manager import create_research_manager
+    from marvel.agents.researchers.bear_researcher import create_bear_researcher
+    from marvel.agents.researchers.bull_researcher import create_bull_researcher
+    from marvel.agents.risk_mgmt.aggressive_debator import create_aggressive_debator
+    from marvel.agents.risk_mgmt.conservative_debator import create_conservative_debator
+    from marvel.agents.risk_mgmt.neutral_debator import create_neutral_debator
+    from marvel.agents.trader.trader import create_trader
+    from marvel.graph.propagation import Propagator
+    from marvel.graph.trading_graph import MarvelGraph
+
+    graph = MarvelGraph(config=config, callbacks=[recorder] if recorder else None)
+    quick, deep = graph.quick_thinking_llm, graph.deep_thinking_llm
+
+    state = Propagator().create_initial_state(ticker, trade_date)
+    for field in _ANALYST_FIELDS.values():
+        state[field] = reports.get(field, "（本次复测未包含该报告）")
+    if quality:
+        state["data_quality_summary"] = (
+            "## 数据质量门控结果（录制回放：硬检查未重算）\n\n" + quality
+        )
+
+    bull = create_bull_researcher(quick)
+    bear = create_bear_researcher(quick)
+    research_manager = create_research_manager(deep)
+    trader = create_trader(quick)
+    aggressive = create_aggressive_debator(quick)
+    conservative = create_conservative_debator(quick)
+    neutral = create_neutral_debator(quick)
+    portfolio_manager = create_portfolio_manager(deep)
+
+    for _ in range(max(1, int(config.get("max_debate_rounds", 1) or 1))):
+        state.update(bull(state))
+        state.update(bear(state))
+    state.update(research_manager(state))
+    state.update(trader(state))
+    for _ in range(max(1, int(config.get("max_risk_discuss_rounds", 1) or 1))):
+        state.update(aggressive(state))
+        state.update(conservative(state))
+        state.update(neutral(state))
+    state.update(portfolio_manager(state))
+    return state
 
 
 def run_debate_only(source, ticker: str, trade_date: str, out: str, max_chars: int,
@@ -168,37 +221,11 @@ def run_debate_only(source, ticker: str, trade_date: str, out: str, max_chars: i
 
     _apply_llm_budget_env()
     recorder = JsonlLlmRecorder(out_path, max_chars=max_chars)
-    graph = MarvelGraph(config=config, callbacks=[recorder])
-    quick, deep = graph.quick_thinking_llm, graph.deep_thinking_llm
-
-    state = Propagator().create_initial_state(ticker, trade_date)
-    for field in _ANALYST_FIELDS.values():
-        state[field] = reports.get(field, "（本次复测未包含该报告）")
-    if quality:
-        state["data_quality_summary"] = (
-            "## 数据质量门控结果（录制回放：硬检查未重算）\n\n" + quality
-        )
-
-    bull = create_bull_researcher(quick)
-    bear = create_bear_researcher(quick)
-    research_manager = create_research_manager(deep)
-    trader = create_trader(quick)
-    aggressive = create_aggressive_debator(quick)
-    conservative = create_conservative_debator(quick)
-    neutral = create_neutral_debator(quick)
-    portfolio_manager = create_portfolio_manager(deep)
 
     started = time.time()
-    for _ in range(max(1, int(config.get("max_debate_rounds", 1) or 1))):
-        state.update(bull(state))
-        state.update(bear(state))
-    state.update(research_manager(state))
-    state.update(trader(state))
-    for _ in range(max(1, int(config.get("max_risk_discuss_rounds", 1) or 1))):
-        state.update(aggressive(state))
-        state.update(conservative(state))
-        state.update(neutral(state))
-    state.update(portfolio_manager(state))
+    state = run_debate_chain(
+        config, ticker, trade_date, reports, quality, recorder=recorder
+    )
 
     print("=" * 72)
     print(f"完成：{time.time() - started:.1f}s；录制写入 {out_path}")

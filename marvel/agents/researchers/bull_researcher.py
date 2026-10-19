@@ -1,4 +1,8 @@
 from marvel.agents.utils.debate_utils import default_round_goal
+from marvel.agents.utils.evidence import (
+    EVIDENCE_DISCIPLINE,
+    provenance_discipline_enabled,
+)
 from marvel.agents.utils.agent_utils import get_language_instruction
 
 
@@ -21,6 +25,7 @@ def create_bull_researcher(llm):
         round_no = investment_debate_state.get("count", 0) + 1
         round_goal = default_round_goal("investment", round_no)
         data_quality_summary = state.get("data_quality_summary", "")
+        discipline = EVIDENCE_DISCIPLINE if provenance_discipline_enabled() else ""
 
         prompt = f"""You are a Bull Analyst advocating for investing in this A-share (China mainland) stock. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
 
@@ -55,7 +60,7 @@ Last bear argument: {current_response}
 
 ⚠️ If the data quality assessment flags any report as low-confidence (grade C/D/F), reduce your reliance on that report and note the data limitation in your argument.
 
-Evidence discipline: news items arrive tagged 「多源印证」(carried by several independent feeds) or 「单一来源，未经交叉验证」(single-source, unverified). When you cite an unverified item, keep its label and treat it as a claim, not a fact — never restate it as confirmed, and never let a single unverified rumour be the sole basis for changing the investment conclusion.
+{discipline}
 
 Deliver a compelling bull argument that integrates A-share market dynamics. Refute the bear's concerns and demonstrate why the bull position holds stronger merit in the Chinese market context.{get_language_instruction()}
 """

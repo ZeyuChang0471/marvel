@@ -11,7 +11,10 @@ back gracefully to free-text generation.
 from __future__ import annotations
 
 from marvel.agents.schemas import PortfolioDecision, render_pm_decision
-from marvel.agents.utils.evidence import append_unverified_appendix
+from marvel.agents.utils.evidence import (
+    append_unverified_appendix,
+    provenance_discipline_enabled,
+)
 from marvel.agents.utils.agent_utils import (
     build_instrument_context,
     get_language_instruction,
@@ -50,6 +53,8 @@ def create_portfolio_manager(llm):
         risk_debate_state = state["risk_debate_state"]
         research_plan = state["investment_plan"]
         trader_plan = state["trader_investment_plan"]
+
+        provenance_rule = _PROVENANCE_RULE if provenance_discipline_enabled() else ""
 
         past_context = state.get("past_context", "")
         lessons_line = (
@@ -100,7 +105,7 @@ def create_portfolio_manager(llm):
 
 ---
 
-Be decisive and ground every conclusion in specific evidence from the analysts.{_NO_LEVELS_RULE}{_PROVENANCE_RULE}{get_language_instruction()}"""
+Be decisive and ground every conclusion in specific evidence from the analysts.{_NO_LEVELS_RULE}{provenance_rule}{get_language_instruction()}"""
 
         final_trade_decision = invoke_structured_or_freetext(
             structured_llm,

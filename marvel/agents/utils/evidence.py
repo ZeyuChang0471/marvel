@@ -35,6 +35,31 @@ UNVERIFIED_HEADER = "## 未经证实的信息（仅供参考，不作为决策�
 
 _APPENDIX_RE = re.compile(r"\n*#{1,6}\s*未经证实的信息.*\Z", re.DOTALL)
 
+#: The instruction the debaters carry. Kept here (one copy) so the A/B experiment
+#: can turn it off in exactly one place.
+EVIDENCE_DISCIPLINE = (
+    "Evidence discipline: news items arrive tagged 「多源印证」(carried by several "
+    "independent feeds) or 「单一来源，未经交叉验证」(single-source, unverified). When you "
+    "cite an unverified item, keep its label and treat it as a claim, not a fact — never "
+    "restate it as confirmed, and never let a single unverified rumour be the sole basis "
+    "for changing the investment conclusion."
+)
+
+
+def provenance_discipline_enabled() -> bool:
+    """实验开关：``MARVEL_ABLATE_PROVENANCE_DISCIPLINE=1`` 时关闭下游纪律。
+
+    This is the *baseline arm* of the A/B experiment (``scripts/compare_polarization.py``).
+    It changes prompts only — the news tool still marks every item, so the claim is
+    available in both arms and the only difference is whether the agents were told
+    to keep the label. Default (unset) = discipline on.
+    """
+    import os
+
+    return os.environ.get("MARVEL_ABLATE_PROVENANCE_DISCIPLINE", "").strip().lower() not in (
+        "1", "true", "yes", "on",
+    )
+
 #: 新闻报告在「工具确实没返回消息」时必须显式说明，否则门控会把「没标注」
 #: 当成「标注在传抄中丢了」。这两个标记是仓库既有的约定。
 NO_NEWS_HINTS = ("No news found", "[数据缺失")
@@ -86,6 +111,8 @@ def build_evidence_digest(
 
     Returns '' when there is no news report at all (news analyst not selected).
     """
+    if not provenance_discipline_enabled():
+        return ""
     report = str(news_report or "")
     if not report.strip():
         return ""

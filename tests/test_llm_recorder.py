@@ -165,8 +165,8 @@ class TestReportsFromRecording:
     def test_it_takes_the_last_long_response_per_analyst(self):
         rd = _load_record_script()
         records = [
-            {"seq": 1, "prompt": "你是一位专注于 A 股市场的技术分析师。", "response": "短文"},
-            {"seq": 2, "prompt": "你是一位专注于 A 股市场的技术分析师。",
+            {"seq": 1, "prompt": "你是一位专注于 A 股市场的技术分析师。你的任务是", "response": "短文"},
+            {"seq": 2, "prompt": "你是一位专注于 A 股市场的技术分析师。你的任务是",
              "response": "报告正文" * 100},
             {"seq": 3, "prompt": "你是数据质量审核员。以下是 9 位分析师", "response": "## 数据质量审核报告"},
             # 辩手提示词里嵌着所有分析师的名字，不能被误判成分析师报告
@@ -179,6 +179,21 @@ class TestReportsFromRecording:
         assert set(reports) == {"market_report"}
         assert reports["market_report"].startswith("报告正文")
         assert quality.startswith("## 数据质量")
+
+    def test_stage_markers_use_role_sentences_not_bare_keywords(self):
+        """量价分析师的提示词里也有「游资」；裸关键词会把它的报告记到游资头上。"""
+        rd = _load_record_script()
+        cases = {
+            "你是一位量价分析师（Volume Price Analysis），严格基于 Anna Coulling《量价分析》": "volume_price",
+            "你是一位专注于 A 股市场的游资与资金流向追踪分析师。": "hot_money",
+            "你是一位专注于 A 股市场的解禁与减持监控分析师。": "lockup",
+            "你是一位专注于 A 股市场的技术分析师。你的任务是": "market",
+            "你是一位专注于 A 股市场的新闻与政策分析师。": "news",
+            "你是一位专注于 A 股市场的政策分析师。": "policy",
+            "你是一位专注于 A 股市场的宏观与板块分析师。": "macro",
+        }
+        for prompt, expected in cases.items():
+            assert rd.classify_stage(prompt) == expected, prompt
 
     def test_it_maps_every_analyst_stage_to_its_state_field(self):
         rd = _load_record_script()
@@ -247,3 +262,69 @@ class TestGraphForwardsTheLlmBudget:
         kwargs = self._kwargs(monkeypatch, MARVEL_LLM_TIMEOUT_S="abc", MARVEL_LLM_MAX_RETRIES="x")
 
         assert "timeout" not in kwargs and "max_retries" not in kwargs
+
+
+def _load_ab_script():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent.parent / "scripts" / "compare_polarization.py"
+    spec = importlib.util.spec_from_file_location("compare_polarization_for_tests", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.unit
+class TestAblationSwitch:
+    def test_discipline_is_on_by_default(self, monkeypatch):
+        from marvel.agents.utils.evidence import provenance_discipline_enabled
+
+        monkeypatch.delenv("MARVEL_ABLATE_PROVENANCE_DISCIPLINE", raising=False)
+        assert provenance_discipline_enabled() is True
+
+    def test_ablation_disables_the_digest(self, monkeypatch):
+        from marvel.agents.utils import evidence
+
+        monkeypatch.setenv("MARVEL_ABLATE_PROVENANCE_DISCIPLINE", "1")
+
+        assert evidence.provenance_discipline_enabled() is False
+        assert evidence.build_evidence_digest(
+            f"某条（{evidence.UNVERIFIED_LABEL}）"
+        ) == ""
+
+
+@pytest.mark.unit
+class TestPolarizationAbHelpers:
+    def test_inject_claim_marks_it_and_does_not_mutate_the_input(self):
+        ab = _load_ab_script()
+        reports = {"news_report": "原有内容"}
+
+        injected = ab.inject_claim(reports, "某爆料", "单一来源，未经交叉验证")
+
+        assert "某爆料（单一来源，未经交叉验证）" in injected["news_report"]
+        assert "原有内容" in injected["news_report"]
+        assert reports["news_report"] == "原有内容"
+
+    def test_summarise_detects_repetition_and_label_retention(self):
+        ab = _load_ab_script()
+        records = [
+            {"prompt": "You are a Bull Analyst advocating", "response": "某爆料（单一来源，未经交叉验证）"},
+            {"prompt": "You are a Bear Analyst making", "response": "某爆料应当被当真"},
+        ]
+
+        table = ab.summarise(
+            records,
+            lambda prompt: "bull" if "Bull Analyst" in prompt else "bear",
+            "单一来源，未经交叉验证",
+            "某爆料",
+        )
+
+        assert table["bull"]["repeats_claim"] is True
+        assert table["bull"]["keeps_label"] is True
+        assert table["bear"]["repeats_claim"] is True
+        assert table["bear"]["keeps_label"] is False
+
+    def test_the_script_is_inert_on_import(self):
+        ab = _load_ab_script()
+        assert callable(ab.main)

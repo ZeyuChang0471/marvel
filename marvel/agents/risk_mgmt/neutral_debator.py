@@ -1,5 +1,9 @@
 from marvel.agents.utils.debate_utils import default_round_goal
 from marvel.agents.utils.agent_utils import get_language_instruction
+from marvel.agents.utils.evidence import (
+    EVIDENCE_DISCIPLINE,
+    provenance_discipline_enabled,
+)
 
 
 
@@ -27,6 +31,7 @@ def create_neutral_debator(llm):
 
         trader_decision = state["trader_investment_plan"]
 
+        discipline = EVIDENCE_DISCIPLINE if provenance_discipline_enabled() else ""
         prompt = f"""As the Neutral Risk Analyst evaluating an A-share (China mainland) stock, your role is to provide a balanced perspective, weighing both the potential benefits and risks. Factor in A-share market structure, broader trends, and diversification strategies.
 
 A-Share Neutral Framework — use these China-specific balancing considerations:
@@ -56,7 +61,7 @@ Macro / Sector-Rotation Report: {macro_report}
 本轮议题目标（第 {round_no} 轮）：{round_goal}
 Conversation history: {history} Last aggressive argument: {current_aggressive_response} Last conservative argument: {current_conservative_response}. If no responses yet, present your own argument.
 
-Advocate for a balanced, position-sized approach that captures A-share upside while respecting the market's structural constraints. Output conversationally without special formatting. Any claim marked 「单一来源，未经交叉验证」 is a claim, not a fact: keep its label, and never let a single unverified rumour drive your argument.{get_language_instruction()}"""
+Advocate for a balanced, position-sized approach that captures A-share upside while respecting the market's structural constraints. Output conversationally without special formatting. {discipline}{get_language_instruction()}"""
 
         response = llm.invoke(prompt)
 

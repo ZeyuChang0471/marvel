@@ -1,5 +1,9 @@
 from marvel.agents.utils.debate_utils import default_round_goal
 from marvel.agents.utils.agent_utils import get_language_instruction
+from marvel.agents.utils.evidence import (
+    EVIDENCE_DISCIPLINE,
+    provenance_discipline_enabled,
+)
 
 
 
@@ -27,6 +31,7 @@ def create_conservative_debator(llm):
 
         trader_decision = state["trader_investment_plan"]
 
+        discipline = EVIDENCE_DISCIPLINE if provenance_discipline_enabled() else ""
         prompt = f"""As the Conservative Risk Analyst evaluating an A-share (China mainland) stock, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. Critically examine high-risk elements in the trader's plan, pointing out where it may expose the firm to undue risk.
 
 A-Share Conservative Framework — emphasize these China-specific downside risks:
@@ -56,7 +61,7 @@ Macro / Sector-Rotation Report: {macro_report}
 本轮议题目标（第 {round_no} 轮）：{round_goal}
 Conversation history: {history} Last aggressive argument: {current_aggressive_response} Last neutral argument: {current_neutral_response}. If no responses yet, present your own argument.
 
-Demonstrate why a conservative stance is the safest path, especially given A-share market structure where downside protection mechanisms (stop-loss, same-day exit) are severely limited. Output conversationally without special formatting. Any claim marked 「单一来源，未经交叉验证」 is a claim, not a fact: keep its label, and never let a single unverified rumour drive your argument.{get_language_instruction()}"""
+Demonstrate why a conservative stance is the safest path, especially given A-share market structure where downside protection mechanisms (stop-loss, same-day exit) are severely limited. Output conversationally without special formatting. {discipline}{get_language_instruction()}"""
 
         response = llm.invoke(prompt)
 

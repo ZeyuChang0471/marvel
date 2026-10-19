@@ -68,6 +68,11 @@ _DEFAULT = ModelCapabilities(
 _BY_ID: dict[str, ModelCapabilities] = {
     "deepseek-chat": _DEEPSEEK_CHAT,
     "deepseek-reasoner": _DEEPSEEK_THINKING,
+    # `deepseek-flash` 是 model_catalog 里在售的 quick 模型（run.py 就在用），
+    # 但 2026-10-17 的真实运行里它漏在这张表外 → 退回「支持 tool_choice」的默认值
+    # → LangChain 强制 tool_choice → DeepSeek 返回
+    # `400 Thinking mode does not support this tool_choice`，Trader 只能回退自由文本。
+    "deepseek-flash": _DEEPSEEK_THINKING,
     "deepseek-v4-flash": _DEEPSEEK_THINKING,
     "deepseek-v4-pro": _DEEPSEEK_THINKING,
     "MiniMax-M2": _MINIMAX_THINKING,

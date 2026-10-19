@@ -1,5 +1,9 @@
 from marvel.agents.utils.debate_utils import default_round_goal
 from marvel.agents.utils.agent_utils import get_language_instruction
+from marvel.agents.utils.evidence import (
+    EVIDENCE_DISCIPLINE,
+    provenance_discipline_enabled,
+)
 
 
 def create_bear_researcher(llm):
@@ -21,6 +25,7 @@ def create_bear_researcher(llm):
         round_no = investment_debate_state.get("count", 0) + 1
         round_goal = default_round_goal("investment", round_no)
         data_quality_summary = state.get("data_quality_summary", "")
+        discipline = EVIDENCE_DISCIPLINE if provenance_discipline_enabled() else ""
 
         prompt = f"""You are a Bear Analyst making the case against investing in this A-share (China mainland) stock. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators unique to the Chinese market. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
 
@@ -56,7 +61,7 @@ Last bull argument: {current_response}
 
 ⚠️ If the data quality assessment flags any report as low-confidence (grade C/D/F), reduce your reliance on that report and note the data limitation in your argument.
 
-Evidence discipline: news items arrive tagged 「多源印证」(carried by several independent feeds) or 「单一来源，未经交叉验证」(single-source, unverified). When you cite an unverified item, keep its label and treat it as a claim, not a fact — never restate it as confirmed, and never let a single unverified rumour be the sole basis for changing the investment conclusion.
+{discipline}
 
 Deliver a compelling bear argument grounded in A-share market realities. Refute the bull's claims and demonstrate the risks of investing in this stock within the Chinese regulatory and market structure.{get_language_instruction()}
 """

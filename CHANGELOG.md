@@ -68,6 +68,25 @@ Breaking changes within the 0.x line are called out explicitly.
   一次真实运行里出现过 provider 调用挂死（TCP CLOSE_WAIT、CPU 冻结），SDK 默认 600s×3 次
   会把流水线拖半小时；录制脚本默认设 240s / 1 次。
 
+### Fixed — 结构化输出（2026-10-19）
+
+- **`deepseek-flash` 漏在能力表外**：它在 `model_catalog` 里是在售的 quick 模型
+  （`run.py` 就在用），但 `capabilities.py` 没有条目 → 退回「支持 tool_choice」的默认值
+  → LangChain 强制 `tool_choice` → DeepSeek 返回
+  `400 Thinking mode does not support this tool_choice`，Trader 只能回退自由文本。
+  修复：补上 `deepseek-flash` 条目，并新增**目录漂移守卫**（目录里每个 DeepSeek 型号
+  都必须有显式能力条目）。
+- **阶段识别修正**：录制复盘把量价分析师的调用记成了游资（VPA 提示词里也有「游资」）。
+  所有分析师标记改用**角色句**，量价排在游资之前；`--from-recording` 现在能取回 9/9 报告。
+
+### Added — 去极化 A/B 实验（2026-10-19）
+
+- `scripts/compare_polarization.py`：同一批报告 + 同一条单一来源假消息，baseline
+  （`MARVEL_ABLATE_PROVENANCE_DISCIPLINE=1`，关闭摘要与纪律）vs current（现行提示词），
+  对比每个阶段是否复述、是否保留标注、最终评级。需要 `--yes`。
+- 首次真实运行（600487 / 2026-10-16，两臂各 8 次调用）：两臂都没有复述假消息、评级均 Hold；
+  baseline 0/8 阶段保留标注，current 6/8。n=1，只作观察。
+
 ### Fixed — 消息获取（2026-10-17，全部联网实测）
 
 - **历史窗口取不到公告**（最要命的一条）。`_fetch_news_announcements` 原先取「最新 30 条」

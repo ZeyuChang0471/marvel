@@ -1,5 +1,9 @@
 from marvel.agents.utils.debate_utils import default_round_goal
 from marvel.agents.utils.agent_utils import get_language_instruction
+from marvel.agents.utils.evidence import (
+    EVIDENCE_DISCIPLINE,
+    provenance_discipline_enabled,
+)
 
 
 
@@ -27,6 +31,7 @@ def create_aggressive_debator(llm):
 
         trader_decision = state["trader_investment_plan"]
 
+        discipline = EVIDENCE_DISCIPLINE if provenance_discipline_enabled() else ""
         prompt = f"""As the Aggressive Risk Analyst evaluating an A-share (China mainland) stock, your role is to champion high-reward opportunities and bold strategies. Focus on the potential upside, growth potential, and momentum—even when these come with elevated risk. Counter the conservative and neutral analysts with data-driven rebuttals.
 
 A-Share Aggressive Framework — leverage these China-specific upside arguments:
@@ -55,7 +60,7 @@ Macro / Sector-Rotation Report: {macro_report}
 本轮议题目标（第 {round_no} 轮）：{round_goal}
 Conversation history: {history} Last conservative argument: {current_conservative_response} Last neutral argument: {current_neutral_response}. If no responses yet, present your own argument.
 
-Engage actively, debate persuasively, and assert why aggressive positioning is optimal for this A-share opportunity. Output conversationally without special formatting. Any claim marked 「单一来源，未经交叉验证」 is a claim, not a fact: keep its label, and never let a single unverified rumour drive your argument.{get_language_instruction()}"""
+Engage actively, debate persuasively, and assert why aggressive positioning is optimal for this A-share opportunity. Output conversationally without special formatting. {discipline}{get_language_instruction()}"""
 
         response = llm.invoke(prompt)
 

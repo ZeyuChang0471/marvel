@@ -25,6 +25,55 @@ def test_minimax_m2_variants_support_tool_choice_and_reasoning_split():
 
 
 @pytest.mark.unit
+def test_deepseek_flash_is_covered_by_the_capability_table():
+    """回归：`deepseek-flash` 在 model_catalog 里，却漏在能力表外。
+
+    真实运行（2026-10-17）里 Trader 用 deepseek-flash + 结构化输出，被强制
+    tool_choice → `400 Thinking mode does not support this tool_choice` → 回退自由文本。
+    """
+    capabilities = get_capabilities("deepseek-flash")
+    assert capabilities.supports_tool_choice is False
+    assert capabilities.requires_reasoning_content_roundtrip is True
+    assert capabilities.preferred_structured_method == "function_calling"
+
+
+@pytest.mark.unit
+def test_every_catalogued_deepseek_model_has_an_explicit_capability_entry():
+    """目录与能力表不允许再漂移：目录里每个可售型号都必须被显式覆盖。"""
+    from marvel.llm_clients.capabilities import get_capabilities as caps
+    from marvel.llm_clients.model_catalog import get_known_models
+
+    unknown = caps("__no_such_model__")
+    catalogued = [model for model in get_known_models()["deepseek"] if model != "custom"]
+    assert catalogued, "模型目录为空，守卫失效"
+
+    missing = [model for model in catalogued if caps(model) is unknown]
+    assert not missing, (
+        f"这些目录里的 DeepSeek 型号没有能力条目（会退回支持 tool_choice 的默认值）: {missing}"
+    )
+
+
+@pytest.mark.unit
+def test_deepseek_flash_structured_binding_does_not_force_tool_choice():
+    """修好后，绑定里不能再出现 tool_choice（否则 API 照样 400）。"""
+    from marvel.llm_clients.openai_client import DeepSeekChatOpenAI
+
+    class _Schema(BaseModel):
+        value: str
+
+    client = DeepSeekChatOpenAI(model="deepseek-flash", api_key="x")
+    wrapped = client.with_structured_output(_Schema)
+    first = wrapped.steps[0] if hasattr(wrapped, "steps") else wrapped
+    kwargs = getattr(first, "kwargs", {}) or {}
+
+    assert "tool_choice" not in kwargs, f"仍然强制了 tool_choice: {kwargs.get('tool_choice')}"
+    assert any(
+        tool.get("function", {}).get("name") == "_Schema"
+        for tool in kwargs.get("tools", [])
+    ), "schema 没有被绑定成工具"
+
+
+@pytest.mark.unit
 def test_unknown_model_uses_permissive_defaults():
     capabilities = get_capabilities("some-future-model")
     assert capabilities.supports_tool_choice is True

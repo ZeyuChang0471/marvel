@@ -85,6 +85,14 @@ python scripts/record_debate.py --from-recording .marvel_state/recordings/debate
     --ticker 600487 --date 2026-10-16 --yes
 ```
 
+A/B 对照（同一批报告、同一条单一来源假消息，baseline 关闭纪律 vs current）：
+
+```bash
+python scripts/compare_polarization.py \
+    --from-recording .marvel_state/recordings/debate-600487-2026-10-16.jsonl \
+    --ticker 600487 --date 2026-10-16 --yes
+```
+
 两个模式默认把 `MARVEL_LLM_TIMEOUT_S=240`、`MARVEL_LLM_MAX_RETRIES=1` 设进环境
 （用已有的值优先）：实测有一次 provider 调用挂住、SDK 默认 600s×3 次会把流水线拖半小时。
 
