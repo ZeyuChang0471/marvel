@@ -192,6 +192,11 @@ section[data-testid="stSidebar"] hr { border-color: var(--mv-rule); margin: .9re
 .mv-brand-sub { color: var(--mv-muted); font-size: .75rem; margin-top: .3rem; letter-spacing: .04em; }
 .mv-brand-by { color: var(--mv-faint); font-size: .7rem; margin-top: .45rem; }
 .mv-brand-by a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--mv-rule); }
+.mv-cover-foot a {
+  color: var(--mv-muted); text-decoration: none;
+  border-bottom: 1px solid var(--mv-rule);
+}
+.mv-cover-foot a:hover { color: var(--mv-paper); border-color: var(--mv-cinnabar); }
 
 /* ── 流程轨道：14 个阶段本来就是序列，编号在这里才有意义 ─────────── */
 .mv-rail { display: grid; gap: .55rem; list-style: none; padding: 0; margin: .3rem 0 1.15rem; }

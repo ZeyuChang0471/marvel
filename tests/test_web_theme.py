@@ -76,6 +76,13 @@ class TestAppUsesTheTheme:
         assert src.count("inject_theme()") == 1
         assert "<style>" not in src, "app.py 里又出现了第二份内联样式表"
 
+    def test_cover_links_to_the_marvel_repo(self):
+        """封面上是 MARVEL 自己的仓库地址，不是 fork 标签。"""
+        src = (REPO_ROOT / "web" / "app.py").read_text(encoding="utf-8")
+
+        assert "https://github.com/ZeyuChang0471/marvel" in src
+        assert "fork of simonlin1212" not in src
+
     def test_report_sections_have_no_emoji(self):
         from web.components.report_viewer import _ANALYST_SECTIONS
 
