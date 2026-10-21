@@ -190,7 +190,7 @@ else:
             </p>
             <div class="mv-cover-hint">在左侧输入股票代码，开始一份新的研究。</div>
             <div class="mv-cover-foot">
-                MARVEL · 项目维护 ·
+                MARVEL · A股多Agent投研系统 ·
                 <a href="https://github.com/ZeyuChang0471/marvel" target="_blank" rel="noopener noreferrer">github.com/ZeyuChang0471/marvel</a><br>
                 仅供学习研究，不构成投资建议。
             </div>

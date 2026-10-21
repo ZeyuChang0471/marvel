@@ -82,6 +82,8 @@ class TestAppUsesTheTheme:
 
         assert "https://github.com/ZeyuChang0471/marvel" in src
         assert "fork of simonlin1212" not in src
+        # 封面只写项目与仓库，不写个人署名（测试里也不写实名）
+        assert "MARVEL · A股多Agent投研系统" in src
 
     def test_report_sections_have_no_emoji(self):
         from web.components.report_viewer import _ANALYST_SECTIONS
