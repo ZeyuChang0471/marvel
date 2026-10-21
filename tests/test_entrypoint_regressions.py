@@ -161,10 +161,17 @@ class TestRunPyCliDispatch:
 @pytest.mark.unit
 class TestNoStaleAnalystCountOnScreen:
     def test_welcome_screen_says_nine(self):
+        import re
+
         src = _read("web", "app.py")
 
-        assert "7位AI分析师" not in src, "欢迎页仍写着 7 位分析师，而流水线跑 9 个"
-        assert "9位AI分析师" in src
+        assert not re.search(r"7\s*位\s*(AI\s*)?分析师", src), (
+            "欢迎页仍写着 7 位分析师，而流水线跑 9 个"
+        )
+        # 2026-10-21 排版改版后欢迎页用中文数字；空格/写法可以变，数量不能变。
+        assert re.search(r"(9\s*位\s*AI\s*分析师|九位分析师)", src), (
+            "欢迎页没有说明是 9 位分析师"
+        )
 
     def test_no_web_or_cli_source_advertises_seven(self):
         import re

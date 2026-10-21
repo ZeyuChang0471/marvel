@@ -25,6 +25,7 @@ from web.diagnostics import arm_stack_dumps  # noqa: E402
 from web.history import clear_incomplete_task, extract_signal, load_analysis  # noqa: E402
 from web.progress import ProgressTracker  # noqa: E402
 from web.runner import run_analysis_in_thread  # noqa: E402
+from web.theme import inject_theme  # noqa: E402
 
 # Armed here rather than in web/launch.py: that module spawns this file as a *child*
 # process, and a dump armed in the parent would never show the child's frames.
@@ -42,151 +43,7 @@ st.set_page_config(
 
 # ── Custom CSS ───────────────────────────────────────────────────────────────
 
-st.markdown(
-    """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
-
-    /* Hide Streamlit chrome for clean video recording.
-       IMPORTANT: do NOT `display:none` the whole header OR the whole toolbar.
-       In Streamlit >= 1.36 the "expand sidebar" button lives *inside* the
-       toolbar (header > stToolbar > stExpandSidebarButton), so hiding either
-       one makes a collapsed sidebar impossible to reopen (issue #36). Instead
-       keep the header/toolbar in the DOM, make the header transparent, and
-       hide only the individual chrome widgets we don't want on camera. */
-    #MainMenu,
-    footer,
-    div[data-testid="stDecoration"],
-    div[data-testid="stStatusWidget"],
-    div[data-testid="stToolbarActions"],
-    div[data-testid="stAppDeployButton"],
-    span[data-testid="stMainMenu"] { display: none !important; }
-    header[data-testid="stHeader"] {
-        background: transparent !important;
-        box-shadow: none !important;
-    }
-    /* Keep the sidebar collapse / expand controls always visible & clickable.
-       Selector list spans multiple Streamlit versions. */
-    button[data-testid="stExpandSidebarButton"],
-    button[data-testid="stSidebarCollapseButton"],
-    button[data-testid="collapsedControl"],
-    [data-testid="stSidebarCollapsedControl"] {
-        display: flex !important;
-        visibility: visible !important;
-        opacity: 1 !important;
-    }
-
-    html, body, [class*="css"] {
-        font-family: 'Inter', -apple-system, sans-serif; color: #f5f1eb;
-    }
-    .stApp {
-        background: #0a0a0a;
-    }
-    section[data-testid="stSidebar"] {
-        background: #C8102E;
-        border-right: 1px solid #8C0E1F;
-        color: #ffffff;
-    }
-    section[data-testid="stSidebar"] .stMarkdown,
-    section[data-testid="stSidebar"] label,
-    section[data-testid="stSidebar"] .stCaption,
-    section[data-testid="stSidebar"] p,
-    section[data-testid="stSidebar"] h1,
-    section[data-testid="stSidebar"] h2,
-    section[data-testid="stSidebar"] h3,
-    section[data-testid="stSidebar"] h4,
-    section[data-testid="stSidebar"] h5,
-    section[data-testid="stSidebar"] h6 {
-        color: #ffffff !important;
-    }
-    section[data-testid="stSidebar"] hr {
-        border-color: rgba(255, 255, 255, 0.35);
-    }
-    section[data-testid="stSidebar"] [data-testid="stExpander"] summary,
-    section[data-testid="stSidebar"] details summary {
-        color: #ffffff !important;
-    }
-    .stMetric label { color: #888 !important; font-size: 0.8rem !important; }
-    .stMetric [data-testid="stMetricValue"] {
-        color: #C8102E !important;
-        font-weight: 700 !important;
-    }
-    .stProgress > div > div > div {
-        background: linear-gradient(90deg, #C8102E, #D7263D) !important;
-    }
-    button[kind="primary"] {
-        background: #ffffff !important;
-        color: #000000 !important;
-        border: none !important;
-        font-weight: 700 !important;
-        letter-spacing: 0.05em !important;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.18) !important;
-        transition: all 0.2s ease !important;
-    }
-    button[kind="primary"]:hover {
-        background: #fff0f0 !important;
-        color: #000000 !important;
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22) !important;
-        transform: translateY(-1px) !important;
-    }
-    /* Secondary buttons (history items) */
-    button[kind="secondary"] {
-        background: #ffffff !important;
-        border: 1px solid #e0e0e0 !important;
-        color: #000000 !important;
-        transition: all 0.2s ease !important;
-    }
-    button[kind="secondary"]:hover {
-        background: #fdecea !important;
-        border-color: #C8102E !important;
-        color: #000000 !important;
-    }
-    button[kind="primary"] [data-testid="stMarkdownContainer"] p,
-    button[kind="secondary"] [data-testid="stMarkdownContainer"] p {
-        color: #000000 !important;
-    }
-    .stExpander {
-        border: 1px solid #e0e0e0 !important;
-        border-radius: 8px !important;
-    }
-    .stTabs [data-baseweb="tab"] {
-        color: #888 !important;
-    }
-    .stTabs [aria-selected="true"] {
-        color: #C8102E !important;
-        border-bottom-color: #C8102E !important;
-    }
-    div[data-testid="stDownloadButton"] button {
-        background: #ffffff !important;
-        border: 1px solid #C8102E !important;
-        color: #C8102E !important;
-    }
-    /* Text input styling */
-    input[data-testid="stTextInputRootElement"] input,
-    .stTextInput input {
-        background: #ffffff !important;
-        border-color: #e0e0e0 !important;
-        color: #000000 !important;
-    }
-    .stTextInput input:focus {
-        border-color: #C8102E !important;
-        box-shadow: 0 0 0 1px #C8102E !important;
-    }
-    input[data-testid="stTextInputRootElement"] input::placeholder,
-    .stTextInput input::placeholder {
-        color: #999999 !important;
-        opacity: 1;
-    }
-    /* Date input styling */
-    .stDateInput input {
-        background: #ffffff !important;
-        border-color: #e0e0e0 !important;
-        color: #000000 !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+inject_theme()
 
 
 # ── Build config ─────────────────────────────────────────────────────────────
@@ -323,48 +180,18 @@ else:
         )
     st.markdown(
         """
-        <div style="
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 60vh;
-            text-align: center;
-        ">
-            <div style="font-size: 4rem; margin-bottom: 1rem;">📈</div>
-            <div style="
-                font-size: 2.5rem;
-                font-weight: 900;
-                margin-bottom: 0.5rem;
-            ">
-                <span style="color: #C8102E;">MARVEL</span>
-            </div>
-            <div style="color: #888; font-size: 1.1rem; max-width: 500px; line-height: 1.6;">
-                Multi-Agent Research & Valuation Engine for Long-short<br>
-                A股多Agent投研分析系统<br>
-                9位AI分析师 → 质量门控 → 多空辩论 → 风控评估 → 最终决策
-            </div>
-            <div style="
-                margin-top: 2rem;
-                padding: 1rem 2rem;
-                border: 1px solid #222;
-                border-radius: 12px;
-                color: #666;
-                font-size: 0.9rem;
-            ">
-                ← 在左侧输入股票代码，开始分析
-            </div>
-            <div style="
-                margin-top: 2.5rem;
-                padding: 0.8rem 1.5rem;
-                color: #555;
-                font-size: 0.75rem;
-                max-width: 500px;
-                line-height: 1.6;
-                border-top: 1px solid #1a1a1a;
-            ">
+        <div class="mv-cover">
+            <div class="mv-cover-rule"></div>
+            <div class="mv-cover-word">MARVEL</div>
+            <div class="mv-cover-sub">A股多Agent投研系统</div>
+            <p class="mv-cover-lede">
+                九位分析师分工取证，经质量门控、多空辩论与三方风控，
+                收束成一份可读、可复核的研究报告。
+            </p>
+            <div class="mv-cover-hint">在左侧输入股票代码，开始一份新的研究。</div>
+            <div class="mv-cover-foot">
                 MARVEL · 项目维护 · fork of simonlin1212/TradingAgents-Astock<br>
-                Multi-Agent Research &amp; Valuation Engine for Long-short
+                仅供学习研究，不构成投资建议。
             </div>
         </div>
         """,

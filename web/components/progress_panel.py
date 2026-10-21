@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import time
 
 import streamlit as st
@@ -23,7 +24,7 @@ def _render_source_timings(tracker: ProgressTracker) -> None:
     if not samples:
         return
 
-    with st.expander(f"⏱️ 数据源耗时（最近 {len(samples)} 次）", expanded=tracker.is_stalled()):
+    with st.expander(f"数据源耗时（最近 {len(samples)} 次）", expanded=tracker.is_stalled()):
         st.caption(
             "分析是串行的：如果卡住不动，耗时最长的那一项通常就是它卡的地方。"
             "（`MARVEL_STALL_TIMEOUT_S` 可调强制复位按钮出现的等待时长，默认 5 分钟。）"
@@ -33,14 +34,6 @@ def _render_source_timings(tracker: ProgressTracker) -> None:
             st.markdown(
                 f"- `{name}` — **{seconds:.1f}s**（{ago:.0f} 秒前完成）"
             )
-
-
-def _status_badge(status: str) -> str:
-    if status == "done":
-        return '<span style="color:#22c55e; font-size:1.3rem;">●</span>'
-    if status == "active":
-        return '<span style="color:#C8102E; font-size:1.3rem;">◉</span>'
-    return '<span style="color:#333; font-size:1.3rem;">○</span>'
 
 
 def _format_time(seconds: float) -> str:
@@ -53,22 +46,21 @@ def _render_controls(tracker: ProgressTracker) -> None:
 
     These call tracker methods that existed from the start but had **no
     callers**, so the entire cancel path was dead code: a run could not be
-    stopped, and `web/runner.py`'s `_close_and_discard` / `mark_stopped`
-    handling was unreachable. For a pipeline that spends real money on LLM
-    calls per run, being unable to stop one is a cost leak, not just a missing
-    button.
+    stopped, and `web/runner.py`'s `_close_and_discard` /
+    `mark_stopped()` handling was unreachable. For a pipeline that spends real
+    money on LLM calls per run, being unable to stop one is a cost leak.
     """
     c1, c2, _ = st.columns([1, 1, 3])
 
     if tracker.is_paused:
-        if c1.button("▶ 继续", use_container_width=True):
+        if c1.button("继续", use_container_width=True):
             tracker.resume()
             st.rerun()
-    elif c1.button("⏸ 暂停", use_container_width=True):
+    elif c1.button("暂停", use_container_width=True):
         tracker.pause()
         st.rerun()
 
-    if c2.button("⏹ 停止分析", use_container_width=True):
+    if c2.button("停止分析", use_container_width=True):
         # Set the notice before requesting the stop: mark_stopped() clears the
         # tracker, so afterwards there is no way to tell "you stopped it" from
         # "it never ran".
@@ -80,62 +72,68 @@ def _render_controls(tracker: ProgressTracker) -> None:
         st.info("已暂停：当前流式步骤结束后会停住，点「继续」恢复。")
 
 
-def _render_stage_row(stages: list[dict[str, str]], statuses: dict[str, str]) -> None:
-    cols = st.columns(len(stages))
-    for col, stage in zip(cols, stages):
+def _render_rail(
+    stages: list[dict[str, str]],
+    statuses: dict[str, str],
+    *,
+    start: int = 1,
+    variant: str = "analysts",
+) -> None:
+    """14 个阶段本身就是序列，所以这里用编号——编号在这里是信息，不是装饰。"""
+    items = []
+    for offset, stage in enumerate(stages):
         status = statuses.get(stage["id"], "pending")
-        badge = _status_badge(status)
-        label_color = (
-            "#f5f1eb" if status == "active"
-            else "#888" if status == "pending"
-            else "#22c55e"
+        css = "done" if status == "done" else ("active" if status == "active" else "pending")
+        items.append(
+            f'<li class="{css}">'
+            f'<span class="n">{start + offset:02d}</span>'
+            f'<span class="name">{html.escape(stage["name"])}</span>'
+            f"</li>"
         )
-        col.markdown(
-            f"""
-            <div style="text-align:center; padding:0.5rem 0;">
-                {badge}<br>
-                <span style="font-size:0.75rem; color:{label_color};">{stage['name']}</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        f'<ol class="mv-rail mv-rail--{variant}">' + "".join(items) + "</ol>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_progress(tracker: ProgressTracker) -> None:
     """Render the pipeline progress panel."""
 
+    completed = len(tracker.completed_stages)
+    total = len(ANALYST_STAGES) + len(PIPELINE_ONLY_STAGES)
+    pct = completed / total if total else 0
+
     st.markdown(
         f"""
-        <div style="text-align:center; margin:1rem 0 0.5rem;">
-            <span style="font-size:1.6rem; font-weight:700; color:#f5f1eb;">
-                {"分析已暂停" if tracker.is_paused else "分析进行中"}
-            </span>
-            <span style="font-size:1.1rem; color:#888; margin-left:0.8rem;">
-                {tracker.ticker}
-            </span>
-        </div>
+        <header class="mv-masthead">
+            <div>
+                <div class="mv-kicker">
+                    <span>{html.escape(tracker.ticker)}</span>
+                    <span class="sep"></span>
+                    <span>分析流水线</span>
+                </div>
+                <h1 class="mv-title">{"分析已暂停" if tracker.is_paused else "分析进行中"}</h1>
+                <div class="mv-meta">
+                    <span>{completed}/{total} 阶段</span>
+                    <span>{_format_time(tracker.elapsed)}</span>
+                </div>
+            </div>
+        </header>
         """,
         unsafe_allow_html=True,
     )
 
-    completed = len(tracker.completed_stages)
-    total = len(ANALYST_STAGES) + len(PIPELINE_ONLY_STAGES)
-    pct = completed / total if total else 0
-    st.progress(pct, text=f"{completed}/{total} 阶段完成  ·  {_format_time(tracker.elapsed)}")
+    st.progress(pct, text=f"{completed}/{total} 阶段完成 · {_format_time(tracker.elapsed)}")
 
     statuses = tracker.stage_snapshot()
 
-    st.markdown(
-        '<div style="margin:0.5rem 0 0.3rem; font-size:0.85rem; color:#888;">ANALYSTS</div>',
-        unsafe_allow_html=True,
-    )
-    _render_stage_row(ANALYST_STAGES, statuses)
+    st.markdown('<div class="mv-rail-label">01–09　分析师取证</div>', unsafe_allow_html=True)
+    _render_rail(ANALYST_STAGES, statuses, start=1, variant="analysts")
 
-    st.markdown(
-        '<div style="margin:0.8rem 0 0.3rem; font-size:0.85rem; color:#888;">PIPELINE</div>',
-        unsafe_allow_html=True,
+    st.markdown('<div class="mv-rail-label">10–14　裁决流程</div>', unsafe_allow_html=True)
+    _render_rail(
+        PIPELINE_ONLY_STAGES, statuses, start=len(ANALYST_STAGES) + 1, variant="pipeline"
     )
-    _render_stage_row(PIPELINE_ONLY_STAGES, statuses)
 
     st.markdown("---")
 
@@ -159,18 +157,14 @@ def render_progress(tracker: ProgressTracker) -> None:
     # a membership test followed by an index that could raise KeyError.
     reports = tracker.report_snapshot()
     completed_reports = [
-        (stage["name"], stage["icon"], reports[stage["id"]])
+        (stage["name"], reports[stage["id"]])
         for stage in ANALYST_STAGES + PIPELINE_ONLY_STAGES
         if stage["id"] in reports
     ]
 
     if completed_reports:
-        st.markdown(
-            '<div style="margin:0.5rem 0 0.3rem; font-size:0.85rem; color:#888;">'
-            f"REPORTS ({len(completed_reports)})</div>",
-            unsafe_allow_html=True,
-        )
-        for name, icon, report in reversed(completed_reports):
+        st.markdown('<div class="mv-rail-label">已产出的报告</div>', unsafe_allow_html=True)
+        for name, report in reversed(completed_reports):
             is_latest = (name == completed_reports[-1][0])
-            with st.expander(f"{icon} {name}", expanded=is_latest):
+            with st.expander(name, expanded=is_latest):
                 st.markdown(report[:3000])

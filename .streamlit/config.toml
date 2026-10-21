@@ -16,9 +16,10 @@ enableCORS = true
 enableXsrfProtection = true
 
 [theme]
+# 夜读研报台：墨色纸面 + 朱砂强调（细节见 web/theme.py）
 base = "dark"
-primaryColor = "#C8102E"
-backgroundColor = "#0a0a0a"
-secondaryBackgroundColor = "#0f0f0f"
-textColor = "#f5f1eb"
+primaryColor = "#C94B3A"
+backgroundColor = "#0C1216"
+secondaryBackgroundColor = "#121A1F"
+textColor = "#E9E2D3"
 font = "sans serif"

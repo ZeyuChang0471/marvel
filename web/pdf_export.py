@@ -31,6 +31,7 @@ except ImportError as exc:
     _FPDF_IMPORT_ERROR = exc
 
 from web.stock_display import normalize_stock_mentions, stock_display_label
+from web.signal_labels import seal_label, signal_tone
 
 
 _FPDF_VERSION = getattr(_fpdf_mod, "__version__", None) or getattr(_fpdf_mod, "FPDF_VERSION", "0")
@@ -273,6 +274,27 @@ def _discover_cjk_fonts() -> tuple[Path, Path] | None:
     return None
 
 
+_SERIF_CANDIDATES = (
+    "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSerifCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSerifCJKsc-Regular.otf",
+    "/System/Library/Fonts/Supplemental/Songti.ttc",
+    "C:/Windows/Fonts/simsun.ttc",
+)
+
+
+def _find_serif_font() -> Path | None:
+    """宋体只用于标题；找不到就退回无衬线，导出不能因此失败。"""
+    env = _env_font_path("MARVEL_PDF_SERIF_FONT")
+    if env:
+        return env
+    for candidate in _SERIF_CANDIDATES:
+        path = Path(candidate)
+        if path.exists():
+            return path
+    return None
+
+
 def _find_cjk_fonts() -> tuple[Path, Path]:
     env_regular = _env_font_path(_PDF_FONT_ENV)
     if env_regular:
@@ -296,6 +318,24 @@ def _collection_font_number(path: Path) -> int:
     return _TTC_SC_FACE_INDEXES.get(path.name, 0)
 
 
+#: 印刷版配色：纸白 + 墨色 + 朱砂（与 Web 主题同一语义）
+_PDF_INK = (20, 26, 29)
+_PDF_MUTED = (110, 122, 126)
+_PDF_RULE = (216, 210, 196)
+_PDF_CINNABAR = (201, 75, 58)
+_PDF_JADE = (79, 138, 116)
+_PDF_BRASS = (194, 163, 107)
+
+#: 嵌入的中文字体没有这些字形，留着只会在日志里刷 "missing glyphs"。
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D]"
+)
+
+
+def _strip_emoji(text: str) -> str:
+    return _EMOJI_RE.sub("", str(text or "")).strip()
+
+
 def _strip_think(text: str) -> str:
     return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
 
@@ -310,23 +350,25 @@ def _strip_md_inline(text: str) -> str:
 
 
 def _compact_inline_text(text: str) -> str:
-    """Collapse table/alignment whitespace that would create wide PDF gaps."""
-    return re.sub(r"[ \t\u3000]{2,}", " ", text).strip()
+    """Collapse table/alignment whitespace and drop glyphs the font lacks."""
+    return re.sub(r"[ \t\u3000]{2,}", " ", _strip_emoji(text)).strip()
 
 
 def _format_table_cells(cells: list[str]) -> str:
     cleaned = [_compact_inline_text(_strip_md_inline(cell)) for cell in cells]
     cleaned = [cell for cell in cleaned if cell]
-    return " | ".join(cleaned)
+    # 印刷版用全角空格分隔表格单元，比竖线干净（Web 仍用真正的表格）。
+    return "　　".join(cleaned)
 
 
 def _signal_color(signal: str) -> tuple[int, int, int]:
-    s = signal.upper()
-    if "BUY" in s:
-        return (34, 197, 94)
-    if "SELL" in s:
-        return (239, 68, 68)
-    return (251, 191, 36)
+    """A 股约定：红涨绿跌；持有用黄铜色（原先买入画绿、卖出画红，是反的）。"""
+    tone = signal_tone(signal)
+    if tone == "up":
+        return _PDF_CINNABAR
+    if tone == "down":
+        return _PDF_JADE
+    return _PDF_BRASS
 
 
 _REPORT_SECTIONS = [
@@ -376,13 +418,32 @@ class _ReportPDF(FPDF):
                 f"请换一个 TTF/OTF/TTC 字体并通过 {_PDF_FONT_ENV} 指定。"
             ) from exc
 
+        self._serif_available = False
+        serif_font = _find_serif_font()
+        if serif_font is not None:
+            try:
+                self.add_font(
+                    "CJKSerif", "", str(serif_font),
+                    collection_font_number=_collection_font_number(serif_font),
+                )
+                self._serif_available = True
+            except Exception:
+                self._serif_available = False
+
     def _use_font(self, style: str = "", size: int = 10) -> None:
         self.set_font("CJK", style, size)
+
+    def _use_serif(self, size: int = 12) -> None:
+        if self._serif_available:
+            self.set_font("CJKSerif", "", size)
+        else:
+            self._use_font("B", size)
 
     def _text_block_width(self) -> float:
         return self.w - self.l_margin - self.r_margin
 
     def _write_multicell(self, height: float, text: str, **kwargs: Any) -> None:
+        text = _strip_emoji(text)
         self.set_x(self.l_margin)
         kwargs.setdefault("align", "L")
         kwargs.setdefault("wrapmode", WrapMode.CHAR)
@@ -390,66 +451,88 @@ class _ReportPDF(FPDF):
 
     def header(self) -> None:
         self._use_font("", 8)
-        self.set_text_color(150, 150, 150)
-        self.cell(0, 6, f"A股多Agent投研分析  |  {self.ticker_label}  |  {self.trade_date}", align="C")
-        self.ln(8)
-        self.set_draw_color(60, 60, 60)
-        self.line(10, self.get_y(), self.w - 10, self.get_y())
-        self.ln(4)
+        self.set_text_color(*_PDF_MUTED)
+        self.cell(0, 5, f"A股多Agent投研分析    {self.ticker_label}    {self.trade_date}", align="L")
+        self.ln(6)
+        self.set_draw_color(*_PDF_RULE)
+        self.set_line_width(0.2)
+        y = self.get_y()
+        self.line(self.l_margin, y, self.w - self.r_margin, y)
+        self.ln(5)
 
     def footer(self) -> None:
-        self.set_y(-15)
-        self._use_font("", 8)
-        self.set_text_color(120, 120, 120)
-        self.cell(0, 5, f"Page {self.page_no()}/{{nb}}", align="C")
-        self.ln(4)
-        self._use_font("", 6)
-        self.set_text_color(160, 160, 160)
-        self.cell(0, 4, "仅供学习研究，不构成投资建议", align="C")
+        self.set_y(-14)
+        self._use_font("", 7)
+        self.set_text_color(*_PDF_MUTED)
+        self.cell(120, 4, "仅供学习研究，不构成投资建议", align="L")
+        self.cell(0, 4, f"第 {self.page_no()} 页 / 共 {{nb}} 页", align="R")
 
     def add_cover(self) -> None:
         self.add_page()
-        self.ln(60)
-
-        self._use_font("B", 24)
-        self.set_text_color(255, 90, 31)
-        self.cell(0, 12, "A股多Agent投研分析报告", align="C")
-        self.ln(20)
-
-        self._use_font("B", 36)
-        self.set_text_color(30, 30, 30)
-        self.cell(0, 18, self.ticker_label, align="C")
-        self.ln(16)
-
-        self._use_font("", 14)
-        self.set_text_color(100, 100, 100)
-        self.cell(0, 10, f"分析日期: {self.trade_date}", align="C")
-        self.ln(8)
-        self.cell(0, 10, f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}", align="C")
-        self.ln(20)
-
-        r, g, b = _signal_color(self.signal)
-        self._use_font("B", 40)
-        self.set_text_color(r, g, b)
-        self.cell(0, 20, self.signal.upper(), align="C")
-        self.ln(20)
+        self.ln(52)
 
         self._use_font("", 9)
-        self.set_text_color(120, 120, 120)
+        self.set_text_color(*_PDF_MUTED)
+        self.cell(0, 5, "A股多Agent投研分析报告", align="L")
+        self.ln(7)
+        self.set_draw_color(*_PDF_INK)
+        self.set_line_width(0.6)
+        y = self.get_y()
+        self.line(self.l_margin, y, self.w - self.r_margin, y)
+        self.ln(14)
+
+        # 标的（宋体）+ 右侧朱砂印章
+        title_y = self.get_y()
+        self._use_serif(28)
+        self.set_text_color(*_PDF_INK)
+        self.cell(0, 14, self.ticker_label, align="L")
+        self.ln(20)
+
+        stamp = 32.0
+        x = self.w - self.r_margin - stamp
+        r, g, b = _signal_color(self.signal)
+        self.set_draw_color(r, g, b)
+        self.set_line_width(0.4)
+        self.rect(x, title_y - 2, stamp, stamp)
+        self.rect(x + 1.8, title_y + 0.2, stamp - 3.6, stamp - 3.6)
+        self.set_xy(x, title_y + 7)
+        self._use_serif(15)
+        self.set_text_color(r, g, b)
+        self.cell(stamp, 10, seal_label(self.signal), align="C")
+
+        self.set_xy(self.l_margin, title_y + stamp + 4)
+        self._use_font("", 10)
+        self.set_text_color(*_PDF_MUTED)
+        self.cell(0, 6, f"分析日期    {self.trade_date}", align="L")
+        self.ln(6.5)
+        self.cell(0, 6, f"生成时间    {datetime.now().strftime('%Y-%m-%d %H:%M')}", align="L")
+        self.ln(16)
+
+        self.set_draw_color(*_PDF_RULE)
+        self.set_line_width(0.2)
+        y = self.get_y()
+        self.line(self.l_margin, y, self.w - self.r_margin, y)
+        self.ln(4)
+        self._use_font("", 8)
+        self.set_text_color(*_PDF_MUTED)
         self._write_multicell(
-            5,
-            "免责声明: 本报告由 AI 多 Agent 系统自动生成, 仅供学习研究与技术演示, "
-            "不构成任何投资建议。投资决策请咨询持牌专业机构。"
-            "使用本报告所产生的任何损失由使用者自行承担。",
-            align="C",
+            4.6,
+            "免责声明：本报告由 AI 多 Agent 系统自动生成，仅供学习研究与技术演示，"
+            "不构成任何投资建议。投资决策请咨询持牌专业机构。使用本报告所产生的任何损失由使用者自行承担。",
+            align="L",
         )
 
     def add_section(self, title: str, content: str) -> None:
         self.add_page()
-        self._use_font("B", 16)
-        self.set_text_color(255, 90, 31)
-        self.cell(0, 10, title)
-        self.ln(12)
+        self._use_serif(15)
+        self.set_text_color(*_PDF_INK)
+        self.cell(0, 9, _compact_inline_text(title))
+        self.ln(10.5)
+        self.set_draw_color(*_PDF_RULE)
+        self.set_line_width(0.2)
+        y = self.get_y()
+        self.line(self.l_margin, y, self.w - self.r_margin, y)
+        self.ln(4)
 
         cleaned = _strip_think(content)
         self._render_markdown(cleaned)
@@ -470,22 +553,22 @@ class _ReportPDF(FPDF):
 
             # Headings: ### → 11pt, ## → 13pt, # → 14pt
             if stripped.startswith("###"):
-                self._use_font("B", 11)
-                self.set_text_color(50, 50, 50)
+                self._use_serif(11)
+                self.set_text_color(*_PDF_INK)
                 self.cell(0, 7, _compact_inline_text(stripped.lstrip("#")))
                 self.ln(8)
                 i += 1
                 continue
             if stripped.startswith("##"):
-                self._use_font("B", 13)
-                self.set_text_color(40, 40, 40)
+                self._use_serif(12.5)
+                self.set_text_color(*_PDF_INK)
                 self.cell(0, 8, _compact_inline_text(stripped.lstrip("#")))
                 self.ln(9)
                 i += 1
                 continue
             if stripped.startswith("#"):
-                self._use_font("B", 14)
-                self.set_text_color(255, 90, 31)
+                self._use_serif(14)
+                self.set_text_color(*_PDF_INK)
                 self.cell(0, 9, _compact_inline_text(stripped.lstrip("#")))
                 self.ln(10)
                 i += 1
@@ -493,7 +576,7 @@ class _ReportPDF(FPDF):
 
             # Horizontal rule
             if stripped in ("---", "***", "___"):
-                self.set_draw_color(180, 180, 180)
+                self.set_draw_color(*_PDF_RULE)
                 y = self.get_y() + 2
                 self.line(10, y, self.w - 10, y)
                 self.ln(6)

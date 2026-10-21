@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 import threading
 from typing import Any
@@ -9,7 +10,8 @@ from typing import Any
 import streamlit as st
 
 from web.pdf_export import generate_markdown, generate_pdf
-from web.stock_display import normalize_stock_mentions, stock_display_label
+from web.stock_display import normalize_stock_mentions, stock_display_parts
+from web.theme import seal_label, signal_tone
 
 
 def _strip_think(text: str) -> str:
@@ -64,30 +66,33 @@ def _exports(
     return entry
 
 
-def _signal_style(signal: str) -> tuple[str, str]:
-    s = signal.upper()
-    if "SELL" in s:
-        return "#22c55e", "卖出"
-    if "UNDERWEIGHT" in s:
-        return "#22c55e", "减持"
-    if "BUY" in s:
-        return "#ef4444", "买入"
-    if "OVERWEIGHT" in s:
-        return "#ef4444", "增持"
-    return "#fbbf24", "持有"
-
-
 _ANALYST_SECTIONS = [
-    ("market_report", "📊 技术分析"),
-    ("sentiment_report", "💬 市场情绪"),
-    ("news_report", "📰 新闻舆情"),
-    ("fundamentals_report", "📋 基本面"),
-    ("policy_report", "🏛️ 政策分析"),
-    ("hot_money_report", "🔥 游资追踪"),
-    ("lockup_report", "🔒 解禁/减持"),
-    ("volume_price_report", "📉 量价分析"),
-    ("macro_report", "🌐 宏观与板块"),
+    ("market_report", "技术分析"),
+    ("sentiment_report", "市场情绪"),
+    ("news_report", "新闻舆情"),
+    ("fundamentals_report", "基本面"),
+    ("policy_report", "政策分析"),
+    ("hot_money_report", "游资追踪"),
+    ("lockup_report", "解禁与减持"),
+    ("volume_price_report", "量价分析"),
+    ("macro_report", "宏观与板块"),
 ]
+
+_CN_SIGNAL = {
+    "BUY": "买入",
+    "OVERWEIGHT": "增持",
+    "HOLD": "持有",
+    "UNDERWEIGHT": "减持",
+    "SELL": "卖出",
+}
+
+
+def _signal_name(signal: str) -> str:
+    s = (signal or "").upper()
+    for key, cn in _CN_SIGNAL.items():
+        if key in s:
+            return f"{cn}（{key.title()}）"
+    return "持有（Hold）"
 
 
 def _safe_filename_label(label: str) -> str:
@@ -116,38 +121,44 @@ def render_report(
     """
     exports = _exports(final_state, ticker, trade_date, signal, cache_key)
 
-    color, cn_signal = _signal_style(signal)
-    ticker_label = stock_display_label(ticker, final_state)
+    tone = signal_tone(signal)
+    seal = seal_label(signal)
+    code, name = stock_display_parts(ticker, final_state)
+    title = name or code
+    ticker_label = f"{code} {name}".strip() if name else code
+    code_html = (
+        f'<span class="mv-code">{html.escape(code)}</span>' if name else ""
+    )
 
-    stats_html = ""
+    meta_bits = [f"分析日 {trade_date}"]
     if elapsed is not None:
         m, s = divmod(int(elapsed), 60)
-        stats_html = f'<div style="font-size:0.9rem; color:#888; margin-top:0.3rem;">耗时 {m}:{s:02d}</div>'
+        meta_bits.append(f"耗时 {m}:{s:02d}")
+    meta_bits.append("AI 生成，仅供研究")
+    meta_html = "".join(f"<span>{html.escape(bit)}</span>" for bit in meta_bits)
 
     st.markdown(
         f"""
-        <div style="
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            border: 1px solid #333;
-            border-radius: 16px;
-            padding: 2rem;
-            text-align: center;
-            margin: 1rem 0 2rem;
-        ">
-            <div style="font-size:0.9rem; color:#888; letter-spacing:2px;">TRADING SIGNAL</div>
-            <div style="font-size:3.5rem; font-weight:900; color:{color}; margin:0.3rem 0;">
-                {signal.upper()}
+        <header class="mv-masthead">
+            <div>
+                <div class="mv-kicker">
+                    <span>沪深 A 股</span>
+                    <span class="sep"></span>
+                    <span>{html.escape(trade_date)}</span>
+                </div>
+                <h1 class="mv-title">{html.escape(title)}{code_html}</h1>
+                <div class="mv-dek">研究结论：{html.escape(_signal_name(signal))}</div>
+                <div class="mv-meta">{meta_html}</div>
             </div>
-            <div style="font-size:1.2rem; color:#f5f1eb;">
-                {ticker_label} · {trade_date}
+            <div class="mv-stamp" data-tone="{tone}" title="{html.escape(_signal_name(signal))}">
+                {seal}
             </div>
-            {stats_html}
-        </div>
+        </header>
         """,
         unsafe_allow_html=True,
     )
 
-    st.caption("⚠️ 本报告由 AI 自动生成，仅供学习研究，不构成投资建议。")
+    st.caption("本报告由 AI 自动生成，仅供学习研究，不构成投资建议。")
 
     # Markdown export always works (no font dependency); PDF is generated
     # lazily and guarded so a PDF/font failure never crashes the results page.
@@ -155,7 +166,7 @@ def render_report(
     with col_md:
         md_text = exports["markdown"]
         st.download_button(
-            "📥 下载 Markdown",
+            "下载 Markdown",
             data=md_text.encode("utf-8"),
             file_name=f"MARVEL_{_safe_filename_label(ticker_label)}_{trade_date}.md",
             mime="text/markdown",
@@ -164,7 +175,7 @@ def render_report(
     with col_pdf:
         if exports["pdf"] is not None:
             st.download_button(
-                "📄 下载 PDF",
+                "下载 PDF",
                 data=exports["pdf"],
                 file_name=f"MARVEL_{_safe_filename_label(ticker_label)}_{trade_date}.pdf",
                 mime="application/pdf",
@@ -174,7 +185,7 @@ def render_report(
             # The failure is remembered with the report: retrying it on every rerun
             # was wasted work and doubled as a way to make a slow page slower.
             st.button(
-                "📄 PDF 不可用",
+                "PDF 不可用",
                 disabled=True,
                 use_container_width=True,
                 help=(
@@ -187,11 +198,11 @@ def render_report(
 
     inv_plan = final_state.get("investment_plan", "")
     if inv_plan:
-        st.markdown("### 👔 最终投资建议")
+        st.markdown("## 最终投资建议")
         st.markdown(_display_report_text(inv_plan, ticker, final_state))
         st.markdown("---")
 
-    st.markdown("### 📊 分析师报告")
+    st.markdown("## 分析师报告")
 
     for key, title in _ANALYST_SECTIONS:
         content = final_state.get(key, "")
@@ -202,7 +213,7 @@ def render_report(
 
     debate = final_state.get("investment_debate_state")
     if debate and isinstance(debate, dict):
-        st.markdown("### ⚔️ 多空辩论")
+        st.markdown("## 多空辩论")
         tab_bull, tab_bear, tab_judge = st.tabs(["多方", "空方", "研究经理"])
         with tab_bull:
             st.markdown(_display_report_text(debate.get("bull_history", "") or "无数据", ticker, final_state))
@@ -220,12 +231,12 @@ def render_report(
         or final_state.get("trader_investment_decision", "")
     )
     if trader_decision:
-        with st.expander("💹 交易员决策", expanded=False):
+        with st.expander("交易员决策", expanded=False):
             st.markdown(_display_report_text(trader_decision, ticker, final_state))
 
     risk = final_state.get("risk_debate_state")
     if risk and isinstance(risk, dict):
-        st.markdown("### 🛡️ 风控评估")
+        st.markdown("## 风控评估")
         tab_agg, tab_con, tab_neu, tab_rj = st.tabs(["激进", "保守", "中性", "风控决策"])
         with tab_agg:
             st.markdown(_display_report_text(risk.get("aggressive_history", "") or "无数据", ticker, final_state))
@@ -238,5 +249,5 @@ def render_report(
 
     dqs = final_state.get("data_quality_summary", "")
     if dqs:
-        with st.expander("✅ 数据质量", expanded=False):
+        with st.expander("数据质量", expanded=False):
             st.markdown(_display_report_text(dqs, ticker, final_state))

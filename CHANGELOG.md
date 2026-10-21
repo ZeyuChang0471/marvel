@@ -68,6 +68,22 @@ Breaking changes within the 0.x line are called out explicitly.
   一次真实运行里出现过 provider 调用挂死（TCP CLOSE_WAIT、CPU 冻结），SDK 默认 600s×3 次
   会把流水线拖半小时；录制脚本默认设 240s / 1 次。
 
+### Changed — Web UI 排版（2026-10-21）
+
+把界面从「深色 dashboard」改成**夜读研报台**（`web/theme.py` 单一主题层）：
+
+- 墨色纸面（`#0C1216` / `#121A1F`）+ 暖纸正文（`#E9E2D3`）；A 股红涨绿跌只用于方向；
+  侧栏不再整块红底，改成安静的索引栏。
+- 研报正文/标题改用宋体栈（Noto Serif SC / Songti / SimSun），控件用系统黑体；
+  去掉 Google Fonts 外链（离线机器上只会拖慢首屏）。
+- 结果页换成报头：股票名 + 代码 + 日期/耗时，右侧一枚**朱砂评级印章**（买/增/持/减/卖，
+  双线方印）；这是全站唯一的强元素。
+- 进度页改成两段编号轨道（01–09 取证 / 10–14 裁决），阶段序列用编号是信息不是装饰；
+  指标改成一列账本，不再四张卡。
+- 去掉渐变 hero、emoji 章节标题、卡片阴影；折叠面板/标签页/输入框统一为细线直角；
+  保留 focus-visible、reduced-motion 与侧栏折叠按钮（#36 回归）。
+- 新增 `tests/test_web_theme.py` 守卫（无外链字体、无红侧栏、印章语义、无障碍）。
+
 ### Fixed — 结构化输出（2026-10-19）
 
 - **`deepseek-flash` 漏在能力表外**：它在 `model_catalog` 里是在售的 quick 模型

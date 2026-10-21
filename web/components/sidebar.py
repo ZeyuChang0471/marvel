@@ -131,7 +131,7 @@ def _render_api_key_input(provider_key: str) -> None:
     env_var = _PROVIDER_KEY_ENV.get(provider_key)
 
     if env_var is None:
-        st.caption("ℹ️ Ollama 使用本地模型，无需 API Key。")
+        st.caption("Ollama 使用本地模型，无需 API Key。")
         return
 
     typed = session_api_key(provider_key)
@@ -352,20 +352,17 @@ def render_sidebar() -> None:
 
     st.markdown(
         """
-        <div style="text-align:center; margin-bottom:1.5rem;">
-            <span style="font-size:2rem; font-weight:800; color:#ffffff;">MARVEL</span>
-            <div style="font-size:0.85rem; color:#ffffff; margin-top:0.2rem;">
-                A股多Agent投研系统
-            </div>
-            <div style="font-size:0.7rem; color:#ffffff; margin-top:0.3rem;">
-                by <a href="https://github.com/ZeyuChang0471" style="color:#ffffff; text-decoration:none;">zzy</a>
+        <div class="mv-brand">
+            <div class="mv-brand-word">MARVEL</div>
+            <div class="mv-brand-sub">A股多Agent投研系统</div>
+            <div class="mv-brand-by">
+                by <a href="https://github.com/ZeyuChang0471">zzy</a>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown("---")
     st.markdown("#### 新建分析")
 
     ticker = st.text_input(
@@ -376,9 +373,9 @@ def render_sidebar() -> None:
     )
 
     trade_date, date_note = _resolve_analysis_date()
-    st.caption(f"📅 分析日期：{trade_date.strftime('%Y-%m-%d')}（{date_note}）")
+    st.caption(f"分析日期：{trade_date.strftime('%Y-%m-%d')}（{date_note}）")
 
-    with st.expander("⚙️ 模型配置", expanded=False):
+    with st.expander("模型配置", expanded=False):
         _render_llm_config()
 
     tracker = st.session_state.get("tracker")
@@ -392,10 +389,10 @@ def render_sidebar() -> None:
     ):
         resolved_code, err = _resolve_user_input(ticker)
         if err:
-            st.error(f"❌ {err}")
+            st.error(f"{err}")
         else:
             if resolved_code != ticker.strip():
-                st.success(f"✅ {ticker.strip()} → {resolved_code}")
+                st.success(f"{ticker.strip()} → {resolved_code}")
             st.session_state["start_analysis"] = {
                 "ticker": resolved_code,
                 "trade_date": trade_date.strftime("%Y-%m-%d"),
@@ -410,7 +407,7 @@ def render_sidebar() -> None:
     # relocation is indistinguishable from data loss.
     if DEFAULT_CONFIG.get("results_dir_fell_back"):
         st.warning(
-            "⚠️ 默认输出目录（`~/.marvel`）无法新建文件，通常是安全软件或权限拦截。"
+            "默认输出目录（`~/.marvel`）无法新建文件，通常是安全软件或权限拦截。"
             f"报告已改存到：`{DEFAULT_CONFIG['results_dir']}`。\n\n"
             "想让报告回到原目录：把 `~/.marvel` 加入安全软件白名单，"
             "或设置环境变量 `MARVEL_RESULTS_DIR` 指向一个可写目录。"
@@ -429,4 +426,4 @@ def render_sidebar() -> None:
             st.session_state["start_analysis"] = None
 
     st.markdown("---")
-    st.caption("⚠️ 仅供学习研究，不构成投资建议")
+    st.caption("仅供学习研究，不构成投资建议")
