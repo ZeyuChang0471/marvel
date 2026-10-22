@@ -84,10 +84,14 @@ def _render_rail(
     for offset, stage in enumerate(stages):
         status = statuses.get(stage["id"], "pending")
         css = "done" if status == "done" else ("active" if status == "active" else "pending")
+        state_label = {"done": "完成", "active": "进行中", "pending": "待执行"}[css]
+        current = ' aria-current="step"' if status == "active" else ""
         items.append(
-            f'<li class="{css}">'
+            f'<li class="{css}"{current}>'
+            f'<span class="mark" aria-hidden="true"></span>'
             f'<span class="n">{start + offset:02d}</span>'
             f'<span class="name">{html.escape(stage["name"])}</span>'
+            f'<span class="state">{state_label}</span>'
             f"</li>"
         )
     st.markdown(
@@ -102,6 +106,23 @@ def render_progress(tracker: ProgressTracker) -> None:
     completed = len(tracker.completed_stages)
     total = len(ANALYST_STAGES) + len(PIPELINE_ONLY_STAGES)
     pct = completed / total if total else 0
+    percent = round(pct * 100)
+    statuses = tracker.stage_snapshot()
+    active_stage = next(
+        (
+            stage["name"]
+            for stage in ANALYST_STAGES + PIPELINE_ONLY_STAGES
+            if statuses.get(stage["id"]) == "active"
+        ),
+        None,
+    )
+    if tracker.is_paused:
+        current_label = "当前步骤结束后暂停"
+    elif active_stage:
+        current_label = f"正在执行 · {active_stage}"
+    else:
+        current_label = "等待下一阶段"
+    ticks = "".join("<i></i>" for _ in range(max(0, total - 1)))
 
     st.markdown(
         f"""
@@ -123,9 +144,30 @@ def render_progress(tracker: ProgressTracker) -> None:
         unsafe_allow_html=True,
     )
 
-    st.progress(pct, text=f"{completed}/{total} 阶段完成 · {_format_time(tracker.elapsed)}")
-
-    statuses = tracker.stage_snapshot()
+    st.markdown(
+        f"""
+        <div class="mv-progress" data-paused="{str(tracker.is_paused).lower()}">
+            <div class="mv-progress__head">
+                <span class="mv-progress__label">整体进度</span>
+                <span class="mv-progress__value">
+                    <strong>{completed}</strong> / {total} 阶段
+                    <span aria-hidden="true"> · </span>{percent}%
+                </span>
+            </div>
+            <div class="mv-progress__track" role="progressbar"
+                 aria-label="分析进度" aria-valuemin="0" aria-valuemax="{total}"
+                 aria-valuenow="{completed}">
+                <span class="mv-progress__fill" style="width:{pct * 100:.1f}%"></span>
+                <span class="mv-progress__ticks" aria-hidden="true">{ticks}</span>
+            </div>
+            <div class="mv-progress__foot">
+                <span class="mv-progress__current">{html.escape(current_label)}</span>
+                <span>已用时 {_format_time(tracker.elapsed)} · 每 2 秒刷新</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown('<div class="mv-rail-label">01–09　分析师取证</div>', unsafe_allow_html=True)
     _render_rail(ANALYST_STAGES, statuses, start=1, variant="analysts")

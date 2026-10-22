@@ -126,13 +126,13 @@ elif tracker and tracker.is_running:
     # while a run is in flight, and nothing here ever offered to abandon one.
     if tracker.is_stalled():
         st.warning(
-            f"⚠️ 分析已经 {int(tracker.stalled_for)} 秒没有任何进展"
+            f"分析已经 {int(tracker.stalled_for)} 秒没有任何进展"
             "（可能卡在某个数据源或模型调用上）。"
         )
         st.caption(
             "可以先看下面的「数据源耗时」，判断是哪个源慢；确认无望再强制复位。"
         )
-        if st.button("🛑 强制复位（放弃本次分析并清理断点）", type="primary"):
+        if st.button("强制复位（放弃本次分析并清理断点）", type="primary"):
             ticker_stuck, date_stuck = tracker.ticker, tracker.trade_date
             tracker.force_reset("用户在界面强制复位")
             try:

@@ -228,3 +228,11 @@ class TestThePanelActuallyOffersTheControls:
         src = self._source()
         assert "def _render_controls(" in src
         assert "_render_controls(tracker)" in src
+
+    def test_progress_text_is_not_clipped_by_the_native_bar(self):
+        """原生 st.progress 的文本层会被 3px 轨道裁切，界面只剩乱码。"""
+        src = self._source()
+
+        assert "st.progress(" not in src
+        assert 'class="mv-progress"' in src
+        assert 'role="progressbar"' in src

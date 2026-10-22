@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import os
 from datetime import date
 
@@ -373,7 +374,16 @@ def render_sidebar() -> None:
     )
 
     trade_date, date_note = _resolve_analysis_date()
-    st.caption(f"分析日期：{trade_date.strftime('%Y-%m-%d')}（{date_note}）")
+    st.markdown(
+        f"""
+        <div class="mv-date">
+            <span class="mv-date__label">分析日期</span>
+            <span class="mv-date__value">{trade_date.strftime('%Y-%m-%d')}</span>
+            <span class="mv-date__note">{html.escape(date_note)}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     with st.expander("模型配置", expanded=False):
         _render_llm_config()
