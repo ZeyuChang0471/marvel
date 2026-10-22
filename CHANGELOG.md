@@ -9,8 +9,9 @@
 >   in MARVEL those are `marvel/…`, `~/.marvel/…` and `MARVEL_MEMORY_LOG_PATH`.
 > - The alpha benchmark note "alpha vs SPY" is upstream's; MARVEL uses CSI 300.
 >
-> MARVEL's own version number tracks upstream's `0.2.13` baseline. See
-> `CHANGES_FROM_UPSTREAM.md` and `NOTICE` for what MARVEL changed.
+> Entries at or below `[0.2.13]` describe the upstream project. MARVEL's own
+> releases start at `[0.2.14]`. See `CHANGES_FROM_UPSTREAM.md` and `NOTICE` for
+> what MARVEL changed.
 
 All notable changes to TradingAgents are documented here.
 
@@ -19,6 +20,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 Breaking changes within the 0.x line are called out explicitly.
 
 ## [Unreleased] — MARVEL
+
+- 暂无。
+
+## [0.2.14] — 2026-10-22
+
+首个 MARVEL 自有版本：消息层、去极化、界面与发布工程。
 
 审查驱动的修复，全部由 `tests/` 里的回归用例守着。四个主题：**决策评级的静默出错**、
 **未来函数防护的漏洞**、**文档/许可证/元数据与代码脱节**、**Web UI / CLI / 容器 的可用性与安全**。
@@ -771,6 +778,7 @@ PRs from late 2025 also landed here.
   portfolio manager. LangGraph orchestration, yfinance data, per-agent
   BM25 memory, single-provider OpenAI integration, interactive CLI.
 
+[0.2.14]: https://github.com/ZeyuChang0471/marvel/releases/tag/v0.2.14
 [0.2.4]: https://github.com/TauricResearch/TradingAgents/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/TauricResearch/TradingAgents/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/TauricResearch/TradingAgents/compare/v0.2.1...v0.2.2

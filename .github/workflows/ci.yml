@@ -6,11 +6,30 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check .
+
   test:
     name: pytest (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -63,7 +82,9 @@ jobs:
           # `-e`, so a failing pytest would abort the script before the publish
           # block below ever executed — and the annotations are the whole point.
           set +e
-          pytest tests/ -q 2>&1 | tee /tmp/pytest.log
+          pytest tests/ -q \
+            --cov=marvel --cov=web --cov=cli \
+            --cov-report=term-missing --cov-fail-under=55 2>&1 | tee /tmp/pytest.log
           status=$?
           set -e
           if [ "$status" -ne 0 ]; then

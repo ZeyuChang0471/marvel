@@ -8,8 +8,10 @@
 </p>
 
 <p align="center">
-  <b>🚫 本项目仅供非商业的研究与教学使用，禁止商用。</b><br>
-  许可构成见 <a href="./LICENSING.md">LICENSING.md</a>。<br>
+  <b>🚫 本项目整体按非商业许可分发：Apache-2.0 + PolyForm-NC-1.0.0，禁止商用。</b><br>
+  GitHub 侧栏只识别 Apache-2.0（因为 <code>LICENSE</code> 是 Apache 文本），但 PolyForm 组件使
+  <b>整个发行版</b>不可商用；逐文件清单见 <a href="./LICENSING.md">LICENSING.md</a> 与
+  <a href="./NOTICE">NOTICE</a>。<br>
   <b>⚠️ 免责声明：仅供学习研究与技术演示，不构成任何投资建议。投资决策请咨询持牌专业机构。</b>
 </p>
 
@@ -179,6 +181,9 @@ git clone https://github.com/ZeyuChang0471/marvel.git
 cd marvel
 pip install -e .
 ```
+
+> PyPI 分发名是 `marvel-astock`（避免与已有的 `marvel` 包冲突），导入包名仍是 `marvel`。
+> 发布后可用 `pip install marvel-astock`；当前请从源码安装。
 
 > **⚠️ 没有 `[google]` extra，Gemini 默认装不上**：mootdx 依赖 `httpx>=0.25,<0.26`，
 > 而 `langchain-google-genai` 要求 `httpx>=0.28.1`，声明成 extra 会是一个 pip 解析

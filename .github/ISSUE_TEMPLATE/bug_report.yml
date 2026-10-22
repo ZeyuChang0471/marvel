@@ -1,0 +1,44 @@
+name: Bug report
+description: 报告一个可复现的问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先搜索已有 issue。安全漏洞请按 `SECURITY.md` 私下报告，不要开公开 issue。
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / 提交
+      placeholder: "0.2.14 / 4eb8add"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 实际现象与期望行为
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 最小可复现命令或操作步骤
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 报错
+      description: 请删除 API Key、账户信息与个人数据后再粘贴
+      render: text
+  - type: input
+    id: environment
+    attributes:
+      label: 环境
+      placeholder: "Windows 11 / Python 3.13.5 / DeepSeek"
