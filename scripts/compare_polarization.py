@@ -139,7 +139,7 @@ def main(argv=None) -> int:
     from marvel.agents.utils.evidence import UNVERIFIED_LABEL
     from marvel.agents.utils.rating import parse_rating
     from marvel.dataflows.config import get_config
-    from marvel.harness.llm_recorder import JsonlLlmRecorder, iter_records
+    from marvel.harness.llm_recorder import iter_records
 
     records = list(iter_records(args.from_recording))
     if not records:
@@ -167,8 +167,8 @@ def main(argv=None) -> int:
     print(f"  假消息      : {args.claim}")
     print(f"  报告        : {len(reports)}/9" + (f"（缺 {missing}）" if missing else "（齐全）"))
     print(f"  provider    : {config['llm_provider']} / {config['deep_think_llm']} + {config['quick_think_llm']}")
-    print(f"  baseline    : MARVEL_ABLATE_PROVENANCE_DISCIPLINE=1（无摘要、无纪律）")
-    print(f"  current     : 现行提示词")
+    print("  baseline    : MARVEL_ABLATE_PROVENANCE_DISCIPLINE=1（无摘要、无纪律）")
+    print("  current     : 现行提示词")
     print(f"  输出目录    : {out_dir}")
     print("  调用规模    : 两臂各 8–10 次，共约 16–20 次")
     print("=" * 78)

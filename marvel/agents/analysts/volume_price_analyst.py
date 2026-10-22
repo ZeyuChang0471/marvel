@@ -19,7 +19,6 @@ from marvel.agents.utils.agent_utils import (
     get_language_instruction,
     get_stock_data,
 )
-from marvel.dataflows.config import get_config
 
 _VPA_FRAMEWORK = """你是一位量价分析师（Volume Price Analysis），严格基于 Anna Coulling《量价分析》的理论体系，通过成交量与价格的配合关系揭示市场供需的真实力度和主力（局内人）意图。
 

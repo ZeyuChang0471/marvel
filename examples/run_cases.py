@@ -145,7 +145,7 @@ def run_single(ticker: str, label: str, config: dict) -> None:
         f.write(f"- **Trade Date**: {TRADE_DATE}\n")
         f.write(f"- **Run Time**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
         f.write(f"- **Duration**: {elapsed:.0f}s ({elapsed / 60:.1f} min)\n")
-        f.write(f"- **LLM**: MiniMax-M2.7 / M2.7-highspeed\n")
+        f.write("- **LLM**: MiniMax-M2.7 / M2.7-highspeed\n")
         f.write(f"- **Executable levels redacted**: {redactions} line(s)\n\n")
         f.write(f"## Signal: {decision}\n\n")
         if redacted_decision and redacted_decision != decision:

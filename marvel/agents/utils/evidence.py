@@ -20,7 +20,7 @@ helpers do is mechanical: make sure the uncertainty label survives each hand-off
 from __future__ import annotations
 
 import re
-from typing import Iterable, Sequence
+from typing import Iterable
 
 #: Label printed by ``get_news`` for a story only one feed carried.
 UNVERIFIED_LABEL = "单一来源，未经交叉验证"

@@ -7,7 +7,6 @@ from marvel.agents.utils.agent_utils import (
     get_lockup_expiry,
     get_news,
 )
-from marvel.dataflows.config import get_config
 
 
 def create_lockup_watcher(llm):

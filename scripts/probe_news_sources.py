@@ -40,8 +40,6 @@ def build_checks(start_date: str, end_date: str):
         _fetch_news_announcements,
         _fetch_news_research,
         _fetch_news_sina,
-        get_global_news,
-        get_news,
     )
 
     return [

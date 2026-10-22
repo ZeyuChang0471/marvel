@@ -22,11 +22,6 @@ from marvel.agents.utils.memory import TradingMemoryLog
 from marvel.dataflows.utils import atomic_write_text, safe_ticker_component
 from marvel.dataflows.as_of import analysis_date_as_of
 from marvel.dataflows.a_stock import _get_prefix
-from marvel.agents.utils.agent_states import (
-    AgentState,
-    InvestDebateState,
-    RiskDebateState,
-)
 from marvel.dataflows.config import set_config
 
 # Import the new abstract tool methods from agent_utils

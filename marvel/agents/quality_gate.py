@@ -1,4 +1,3 @@
-from typing import Annotated
 
 from marvel.agents.utils.evidence import NO_NEWS_HINTS, provenance_census
 

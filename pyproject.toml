@@ -133,6 +133,19 @@ extend-exclude = ["venv", ".pytest_tmp", "tmp*", "dist", "build", "*.egg-info"]
 # 先只开确定性最强的规则：语法错误、未定义名、未使用导入/变量。
 # 格式类规则（E501、I、UP）等代码稳定后再逐步加。
 select = ["E4", "E7", "E9", "F"]
+# E402：入口脚本与探针有意在 sys.path / load_dotenv 之后再导入项目模块。
+ignore = ["E402"]
+
+[tool.ruff.lint.per-file-ignores]
+# 这些模块是 re-export hub：导入本身就是对外 API。
+"**/__init__.py" = ["F401"]
+"marvel/agents/utils/agent_utils.py" = ["F401"]
+"marvel/dataflows/alpha_vantage.py" = ["F401"]
+"web/theme.py" = ["F401"]
+# 两个文件的 star import 是既有的装配方式，重构前先允许。
+"cli/main.py" = ["F403", "F405"]
+"marvel/graph/setup.py" = ["F403", "F405"]
+"marvel/graph/trading_graph.py" = ["F403", "F405"]
 
 [tool.coverage.run]
 source = ["marvel", "web", "cli"]

@@ -14,7 +14,7 @@ instead of being a second, unguarded way into the data layer.
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional, Sequence
+from typing import Any, List, Optional
 
 from marvel.dataflows.as_of import analysis_date_as_of
 

@@ -85,8 +85,6 @@ class TestWebServerBinding:
         back to Streamlit's 0.0.0.0 default). What must never happen is a launch
         path naming a non-loopback address as its own default.
         """
-        import re
-
         for name in ("start.sh", "start.bat", "run.py", "web/launch.py"):
             src = _read(*name.split("/"))
             for line in src.splitlines():

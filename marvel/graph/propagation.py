@@ -2,7 +2,6 @@
 
 from typing import Dict, Any, List, Optional
 from marvel.agents.utils.agent_states import (
-    AgentState,
     InvestDebateState,
     RiskDebateState,
 )

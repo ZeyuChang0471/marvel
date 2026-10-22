@@ -171,18 +171,8 @@ def run_debate_only(source, ticker: str, trade_date: str, out: str, max_chars: i
     root = Path(__file__).resolve().parent.parent
     load_dotenv(root / ".env")
 
-    from marvel.agents.managers.portfolio_manager import create_portfolio_manager
-    from marvel.agents.managers.research_manager import create_research_manager
-    from marvel.agents.researchers.bear_researcher import create_bear_researcher
-    from marvel.agents.researchers.bull_researcher import create_bull_researcher
-    from marvel.agents.risk_mgmt.aggressive_debator import create_aggressive_debator
-    from marvel.agents.risk_mgmt.conservative_debator import create_conservative_debator
-    from marvel.agents.risk_mgmt.neutral_debator import create_neutral_debator
-    from marvel.agents.trader.trader import create_trader
     from marvel.agents.utils.rating import parse_rating
     from marvel.dataflows.config import get_config
-    from marvel.graph.propagation import Propagator
-    from marvel.graph.trading_graph import MarvelGraph
     from marvel.harness.llm_recorder import JsonlLlmRecorder, iter_records
 
     records = list(iter_records(source))

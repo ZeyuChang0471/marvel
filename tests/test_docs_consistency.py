@@ -20,7 +20,7 @@ from the code and fail when the prose disagrees.
 
 from __future__ import annotations
 
-import json
+import ast
 import os
 import re
 from pathlib import Path
@@ -616,8 +616,6 @@ class TestPython310Compatibility:
     @staticmethod
     def _imports(tree: "ast.Module") -> list[tuple[str, int, bool]]:
         """Yield ``(top_level_module, lineno, guarded_by_ImportError)``."""
-        import ast
-
         guard_names = {"ImportError", "ModuleNotFoundError"}
 
         def handles_import_error(node: ast.Try) -> bool:

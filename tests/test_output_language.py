@@ -21,7 +21,6 @@ from __future__ import annotations
 import pytest
 
 from marvel.dataflows.config import set_config
-from marvel.dataflows.config import set_config as _set_config
 
 
 @pytest.fixture(autouse=True)

@@ -11,7 +11,6 @@ background thread streaming paid LLM calls to completion with nobody watching.
 from __future__ import annotations
 
 import threading
-import time
 from pathlib import Path
 
 import pytest

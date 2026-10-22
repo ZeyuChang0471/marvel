@@ -28,7 +28,6 @@ from pathlib import Path
 
 import pytest
 
-from marvel.dataflows import as_of
 from marvel.dataflows.as_of import (
     anchored_date,
     analysis_date,

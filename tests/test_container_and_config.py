@@ -18,7 +18,6 @@ container run ignored the endpoint the user had configured.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest

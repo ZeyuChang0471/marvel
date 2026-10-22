@@ -1,4 +1,3 @@
-from typing import Optional
 import datetime
 import typer
 from pathlib import Path
@@ -12,14 +11,12 @@ load_dotenv(".env.enterprise", override=False)
 from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.live import Live
-from rich.columns import Columns
 from rich.markdown import Markdown
 from rich.layout import Layout
 from rich.text import Text
 from rich.table import Table
 from collections import deque
 import time
-from rich.tree import Tree
 from rich import box
 from rich.align import Align
 from rich.rule import Rule
@@ -30,7 +27,6 @@ from cli.models import (
     ANALYST_DISPLAY_NAMES,
     ANALYST_REPORT_KEYS,
     ANALYST_SELECTION_ORDER,
-    AnalystType,
     analyst_agent_name,
 )
 from cli.utils import *
@@ -1062,7 +1058,7 @@ def run_analysis(checkpoint: bool = False):
     layout = create_layout()
 
     try:
-        with Live(layout, refresh_per_second=4) as live:
+        with Live(layout, refresh_per_second=4):
             # Initial display
             update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
@@ -1224,7 +1220,7 @@ def run_analysis(checkpoint: bool = False):
                     "Analysis ended before the Portfolio Manager produced a decision "
                     f"(last completed stages: {', '.join(sorted(k for k, v in message_buffer.report_sections.items() if v)) or 'none'})"
                 )
-            decision = graph.finalize_graph_run(
+            graph.finalize_graph_run(
                 selections["ticker"], selections["analysis_date"], final_state
             )
 

@@ -886,7 +886,6 @@ def _em_get(url, params=None, headers=None, timeout=15, **kwargs):
     **抛出**，而不是把失败响应交给调用方当空数据用。整段重试都在 `_EM_LOCK` 内，与
     节流共用同一把锁——这里本来就是「串行访问东财」的意思。
     """
-    last_exc: Exception | None = None
     # 打点：慢与卡死必须能区分开。_em_get 是东财所有端点的唯一入口，所以在这一层
     # 计时就能覆盖全部 7 个调用点。名称要带上**子域**——push2 / datacenter-web /
     # np-anotice-stock 才是区分这 7 个端点的部分，只留路径等于没记。
@@ -2788,7 +2787,7 @@ def get_profit_forecast(
 
         lines = [
             f"# Consensus EPS Forecast for {code} (A-stock)",
-            f"# Source: 同花顺 analyst consensus (direct HTTP)",
+            "# Source: 同花顺 analyst consensus (direct HTTP)",
             f"# Retrieved: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "",
         ]
@@ -2911,7 +2910,7 @@ def get_hot_stocks(
 
         lines = [
             f"# Hot Stocks with Topic Attribution ({curr_date})",
-            f"# Source: 同花顺 editorial (human-curated reason tags)",
+            "# Source: 同花顺 editorial (human-curated reason tags)",
             f"# Total: {len(rows)} stocks",
             "",
         ]
@@ -2941,7 +2940,7 @@ def get_hot_stocks(
 
         if all_tags:
             cnt = Counter(all_tags)
-            lines.append(f"\n## Theme Frequency (top 15)")
+            lines.append("\n## Theme Frequency (top 15)")
             for tag, n in cnt.most_common(15):
                 lines.append(f"  {tag}: {n} stocks")
 
@@ -3207,7 +3206,7 @@ def get_concept_blocks(
 
         lines = [
             f"# Concept & Sector Blocks for {code} (A-stock)",
-            f"# Source: 百度股市通 (Baidu PAE)",
+            "# Source: 百度股市通 (Baidu PAE)",
             f"# Retrieved: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "",
         ]
@@ -3267,7 +3266,7 @@ def get_fund_flow(
     secid = f"1.{code}" if code.startswith("6") else f"0.{code}"
     lines = [
         f"# Fund Flow for {code} (A-stock)",
-        f"# Source: 东财 push2 (Eastmoney)",
+        "# Source: 东财 push2 (Eastmoney)",
         f"# Retrieved: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
     ]

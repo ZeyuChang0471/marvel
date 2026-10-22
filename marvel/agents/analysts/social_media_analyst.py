@@ -7,7 +7,6 @@ from marvel.agents.utils.agent_utils import (
     get_news,
     get_stock_data,
 )
-from marvel.dataflows.config import get_config
 
 
 def create_social_media_analyst(llm):

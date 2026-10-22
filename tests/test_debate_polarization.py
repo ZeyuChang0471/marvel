@@ -23,7 +23,6 @@ something.
 
 from __future__ import annotations
 
-import re
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -163,7 +162,7 @@ class FakeNewsStub(Runnable):
         if stage == "research_manager":
             return self._with_rating(prompt, default="Hold")
         if stage == "trader":
-            return f"交易计划：按现有证据执行。\n\n**Rating**: " + self._rating(prompt)
+            return "交易计划：按现有证据执行。\n\n**Rating**: " + self._rating(prompt)
         if stage == "portfolio_manager":
             return self._with_rating(prompt, default="Hold")
         return _BODY + _TABLE
@@ -435,7 +434,6 @@ class TestStageMarkersStayAccurate:
     """The experiment is only trustworthy while its stage detection is correct."""
 
     def test_every_pipeline_stage_is_recognisable(self):
-        from marvel.agents.utils.agent_states import AgentState
 
         assert set(_ANALYST_STAGES) == {
             "market", "social", "news", "fundamentals", "policy",

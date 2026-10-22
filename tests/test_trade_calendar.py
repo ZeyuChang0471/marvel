@@ -7,7 +7,7 @@ trading-date set through the module cache so the assertions are deterministic.
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import pytest
 

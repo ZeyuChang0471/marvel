@@ -84,7 +84,7 @@ jobs:
           set +e
           pytest tests/ -q \
             --cov=marvel --cov=web --cov=cli \
-            --cov-report=term-missing --cov-fail-under=55 2>&1 | tee /tmp/pytest.log
+            --cov-report=term-missing --cov-fail-under=62 2>&1 | tee /tmp/pytest.log
           status=$?
           set -e
           if [ "$status" -ne 0 ]; then
